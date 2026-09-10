@@ -1,0 +1,27 @@
+/* CreatorHaven — content/outlier.css  (www.youtube.com)
+ * The outlier multiplier badge shown next to a video title. All hooks are sf-ol- prefixed.
+ * "Creator Ledger": a steel chip with white/silver data text; a hot multiple earns the
+ * crimson border, a fire multiple crimson text as well. Colours are self-contained so the
+ * chip reads the same on either YouTube theme. */
+
+.sf-ol-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 2px;
+  border: 1px solid #27272A;
+  font: 600 11px/1.6 "Space Grotesk", "Inter", system-ui, sans-serif;
+  letter-spacing: -.01em;
+  vertical-align: middle;
+  white-space: nowrap;
+  color: #AAAAB2;
+  background: #1E2124;
+  translate: 0 -1px;
+  transition: all .2s cubic-bezier(.16,1,.3,1);
+}
+
+/* tiers: cold (< median, silver) -> ok (white) -> hot (2x+, crimson border) -> fire (5x+, crimson border + text) */
+.sf-ol-badge[data-tier="cold"] { color: #AAAAB2; }
+.sf-ol-badge[data-tier="ok"]   { color: #FFFFFF; }
+.sf-ol-badge[data-tier="hot"]  { color: #FFFFFF; border-color: #A31D1D; }
+.sf-ol-badge[data-tier="fire"] { color: #FFFFFF; border-color: #A31D1D; background: #A31D1D; }

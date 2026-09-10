@@ -1,0 +1,114 @@
+/* CreatorHaven — on-page thumbnail grabber. "Creator Ledger" design system: void #161719 /
+ * steel #1E2124, burnt crimson #A31D1D only for on/active states, sans only (Space Grotesk
+ * tags, Inter body), 2px corners, 1px zinc-800 hairlines, no shadows except the floating
+ * overlay lift. Every hook is sf-tg- prefixed; colours are self-contained so the spotlight
+ * reads identically on light/dark YouTube. Motion = one spring curve. */
+
+/* ---- floating capture tab: a thin, sharp-cornered steel tab on the right edge ---- */
+.sf-tg-fab {
+  position: fixed; right: 0; bottom: 120px; z-index: 2147483001;
+  width: 34px; height: 88px; padding: 0; border: 1px solid #27272A; border-right: 0; border-radius: 2px 0 0 2px;
+  background: #1E2124; color: #AAAAB2; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+  transition: all .2s cubic-bezier(.16,1,.3,1);
+}
+.sf-tg-fab:hover { color: #FFFFFF; border-color: #71717A; transform: translateY(-2px) scale(1.015); }
+.sf-tg-fab:active { transform: translateY(0) scale(.99); }
+.sf-tg-fab svg { width: 16px; height: 16px; display: block; fill: none; stroke: currentColor; stroke-width: 1; stroke-linecap: round; stroke-linejoin: round; }
+.sf-tg-fabtxt { writing-mode: vertical-rl; font: 600 10px/1 "Space Grotesk", "Inter", system-ui, sans-serif; text-transform: uppercase; letter-spacing: .14em; color: currentColor; }
+.sf-tg-fab.sf-tg-on { color: #FFFFFF; background: #A31D1D; border-color: #A31D1D; }
+
+/* ---- dim backdrop + highlight layer ---- */
+.sf-tg-overlay {
+  position: fixed; inset: 0; z-index: 2147482000;
+  background: rgba(10, 10, 10, .72); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+  animation: sf-tg-fade .2s cubic-bezier(.16,1,.3,1);
+}
+@keyframes sf-tg-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sf-tg-pop { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: none; } }
+
+/* The layer is click-through; only the boxes catch pointer events, so a click on the dim area
+ * falls through to the overlay and closes grab mode. */
+.sf-tg-layer { position: fixed; inset: 0; z-index: 2147482001; pointer-events: none; }
+
+/* ---- a spotlighted thumbnail (hairline ring, zinc-500 on hover) ---- */
+.sf-tg-box {
+  position: fixed; top: 0; left: 0; pointer-events: auto;
+  border-radius: 2px; overflow: hidden; user-select: none; background: #000; cursor: zoom-in;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .14);
+  transition: box-shadow .2s cubic-bezier(.16,1,.3,1); will-change: transform;
+}
+.sf-tg-box:hover { box-shadow: 0 0 0 1px #71717A; }
+.sf-tg-img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+
+/* ---- click-focus "Lightbox Theatre" ---- */
+.sf-tg-focus { position: fixed; inset: 0; z-index: 2147483400; background: rgba(10, 10, 10, .90);
+  -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px);
+  display: flex; align-items: center; justify-content: center; padding: 40px 20px; animation: sf-tg-fade .2s cubic-bezier(.16,1,.3,1); }
+.sf-tg-fcard { position: relative; width: min(860px, 92vw); display: flex; flex-direction: column; gap: 0; animation: sf-tg-pop .3s cubic-bezier(.16,1,.3,1); }
+
+/* top utility bar — text links only: COPY IMAGE // DOWNLOAD // CLOSE; hovering one dims the rest */
+.sf-tg-ftoolbar { display: flex; gap: 14px; justify-content: flex-end; align-items: center; position: relative; padding: 0 2px 12px; }
+.sf-tg-fbtn { display: inline-flex; align-items: center; height: auto; padding: 4px 0; border: 0; background: transparent; color: #AAAAB2; cursor: pointer;
+  font: 600 11px/1 "Space Grotesk", "Inter", system-ui, sans-serif; text-transform: uppercase; letter-spacing: .14em; box-shadow: none; border-radius: 2px;
+  transition: all .2s cubic-bezier(.16,1,.3,1); }
+.sf-tg-fbtn svg { display: none; }
+.sf-tg-fbtn:hover { color: #FFFFFF; }
+.sf-tg-fsep { color: #3F3F46; font: 600 11px/1 "Space Grotesk", "Inter", system-ui, sans-serif; letter-spacing: .14em; user-select: none; }
+.sf-tg-ftoolbar:hover .sf-tg-fbtn { opacity: .4; }
+.sf-tg-ftoolbar:hover .sf-tg-fbtn:hover { opacity: 1; }
+
+/* inline split option selector — [ DOWNLOAD ] ➔ RAW THUMBNAIL / TILE (WITH TITLE), right-aligned under the bar */
+.sf-tg-fopts { display: none; justify-content: flex-end; align-items: center; gap: 10px; padding: 0 2px 12px; margin-top: -2px;
+  font: 600 11px/1 "Space Grotesk", "Inter", system-ui, sans-serif; text-transform: uppercase; letter-spacing: .14em; color: #AAAAB2; }
+.sf-tg-fopts.sf-tg-open { display: flex; animation: sf-tg-fade .2s cubic-bezier(.16,1,.3,1); }
+.sf-tg-flabel { color: #FFFFFF; }
+.sf-tg-farrow { color: #71717A; }
+.sf-tg-fopt { border: 0; background: transparent; padding: 4px 0 3px; margin: 0; cursor: pointer; color: #AAAAB2; border-bottom: 1px solid transparent; border-radius: 0;
+  font: inherit; text-transform: inherit; letter-spacing: inherit; transition: all .2s cubic-bezier(.16,1,.3,1); }
+.sf-tg-fopt:hover { color: #FFFFFF; border-bottom-color: #A31D1D; }
+.sf-tg-fopts:hover .sf-tg-fopt { opacity: .4; }
+.sf-tg-fopts:hover .sf-tg-fopt:hover { opacity: 1; }
+
+/* the image: 1px hairline, 2px corners, black letterbox, no frame, no shadow */
+.sf-tg-fimg { width: 100%; border-radius: 2px; display: block; background: #000; border: 1px solid #27272A; box-shadow: none; }
+
+/* title strip below the image — sans, 13px, hairline top rule */
+.sf-tg-fcap { color: #AAAAB2; font: 400 13px/1.5 "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; font-style: normal;
+  letter-spacing: -.01em; text-align: left; text-shadow: none; padding: 12px 2px 0; margin-top: 12px; border-top: 1px solid #27272A; }
+
+/* ---- hover action chips on a spotlighted thumbnail (steel, crimson border when hovered) ---- */
+.sf-tg-bar {
+  position: absolute; top: 8px; right: 8px; display: flex; gap: 5px; justify-content: flex-end; max-width: calc(100% - 16px);
+  opacity: 0; transform: translateY(-4px); transition: all .2s cubic-bezier(.16,1,.3,1);
+}
+.sf-tg-box:hover .sf-tg-bar { opacity: 1; transform: none; }
+.sf-tg-btn {
+  border: 1px solid #27272A; cursor: pointer; border-radius: 2px; height: 30px; min-width: 30px; padding: 0 7px;
+  background: #1E2124; color: #AAAAB2;
+  display: inline-flex; align-items: center; justify-content: center; transition: all .2s cubic-bezier(.16,1,.3,1);
+}
+.sf-tg-btn:hover { color: #FFFFFF; border-color: #A31D1D; }
+.sf-tg-btn svg { width: 15px; height: 15px; display: block; fill: none; stroke: currentColor; stroke-width: 1; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---- title caption (hover, on the spotlight box) ---- */
+.sf-tg-title {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 20px 10px 8px; color: #FFFFFF; pointer-events: none;
+  font: 500 13px/1.35 "Inter", system-ui, Arial, sans-serif; letter-spacing: -.01em;
+  background: linear-gradient(to top, rgba(10, 10, 10, .92), rgba(10, 10, 10, 0));
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; opacity: 0; transition: all .2s cubic-bezier(.16,1,.3,1);
+}
+.sf-tg-box:hover .sf-tg-title { opacity: 1; }
+.sf-tg-title:empty { display: none; }
+
+/* ---- toast (steel panel, sans) ---- */
+.sf-tg-toast {
+  position: fixed; left: 50%; bottom: 78px; transform: translateX(-50%) translateY(12px);
+  background: #1E2124; color: #FFFFFF;
+  border: 1px solid #27272A; padding: 10px 16px; border-radius: 2px;
+  font: 500 13px/1.4 "Inter", system-ui, Arial, sans-serif; letter-spacing: -.01em; z-index: 2147483600;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+  opacity: 0; pointer-events: none; transition: all .2s cubic-bezier(.16,1,.3,1); max-width: 80vw; text-align: center;
+}
+.sf-tg-toast.sf-tg-toast-show { opacity: 1; transform: translateX(-50%) translateY(0); }

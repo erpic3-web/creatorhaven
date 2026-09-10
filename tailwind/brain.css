@@ -1,0 +1,143 @@
+/* ============================================================================
+   STUDIO BRAIN canvas — Tailwind v4 source. Compiled to static/brain.css by
+   build-css.cmd (run it after editing any brain class in index.html / app.js).
+   Utilities are emitted UNLAYERED on purpose: style.css is unlayered, and a
+   layered utility would lose to `button {}` / `textarea {}` there no matter
+   its specificity. Preflight is deliberately NOT imported (it would reset the
+   rest of the app).
+   ========================================================================== */
+@layer theme;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css";
+
+@source "../templates/index.html";
+@source "../static/app.js";
+
+@theme {
+  /* the app's root font-size is 14px, so every rem-based Tailwind size would shrink 12.5%;
+     the canvas is specified in CSS pixels, so pin the scales in px here */
+  --spacing: 4px;
+  --container-xs: 320px; --container-sm: 384px; --container-md: 448px; --container-lg: 512px;
+  --container-3xl: 768px; --container-4xl: 896px;
+  --text-xs: 12px; --text-xs--line-height: 1.34;
+  --text-sm: 14px; --text-sm--line-height: 1.43;
+  --text-base: 16px; --text-base--line-height: 1.625;
+  --text-lg: 18px; --text-lg--line-height: 1.56;
+  --text-xl: 20px; --text-xl--line-height: 1.4;
+  --text-2xl: 24px; --text-2xl--line-height: 1.33;
+  --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px;
+  /* CREATOR LEDGER: the accent scale is burnt crimson (amber-* keeps the class names;
+     red-700 is pinned to the same brand value so `text-red-700` works too) */
+  --color-amber-300: #E07070;
+  --color-amber-400: #C4302B;
+  --color-amber-500: #A31D1D;
+  --color-amber-600: #8A1818;
+  --color-amber-700: #6E1313;
+  --color-red-700: #A31D1D;
+  --color-neutral-950: #161719;
+  --color-zinc-950: #161719;
+  --color-zinc-900: #1E2124;
+  --color-zinc-800: #27272A;
+  --font-serif: "Space Grotesk", "Inter", system-ui, sans-serif;
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Space Grotesk", ui-monospace, "SF Mono", "JetBrains Mono", monospace;
+  --font-serif: "Instrument Serif", "Iowan Old Style", Georgia, serif;
+  --ease-canvas: cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-fade-in-up: fade-in-up .5s cubic-bezier(0.16, 1, 0.3, 1) both;
+  --animate-blur-in: blur-in .6s cubic-bezier(0.16, 1, 0.3, 1) both;
+  @keyframes fade-in-up { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  @keyframes blur-in { from { opacity: 0; transform: translateY(18px); filter: blur(6px); } to { opacity: 1; transform: none; filter: blur(0); } }
+}
+
+/* ---- the obsidian ground: while the brain is the active section the whole
+   page chrome drops into the dark token set, whatever the theme toggle says */
+body.brain-active {
+  --bg: #161719; --ground: #161719; --panel: #1E2124; --panel2: #23272B; --card: #1E2124; --elev: #23272B;
+  --line: #27272A; --line2: #3F3F46; --hover: #23272B; --surface: #1E2124;
+  --text: #ffffff; --muted: #AAAAB2; --faint: #6B6B75;
+  --accent: #A31D1D; --accent-soft: #C4302B; --accent-ink: #ffffff; --accent2: #E4E4E7; --trail: #E4E4E7;
+  --grad: #A31D1D; --grad-soft: rgba(163,29,29,.12);
+  --nav-bg: #161719; --nav-line: #27272A; --nav-text: #e4e4e7; --nav-muted: #AAAAB2; --nav-faint: #6B6B75;
+  --nav-hover: #23272B; --nav-active-bg: rgba(163,29,29,.14); --nav-active-tx: #ffffff;
+  color-scheme: dark;
+  background: #161719 !important;
+}
+/* a transform animation on an ancestor would re-parent the fixed dock for its duration */
+body.brain-active #tab-studio.active, #ssec-strategy.on { animation: none; }
+
+/* ---- component classes (repeated by app.js) --------------------------------- */
+.st-turn { @apply relative; }
+.st-who { @apply flex items-center gap-2 mb-4 font-mono text-[10px] tracking-widest uppercase text-zinc-500; }
+.st-dot { @apply inline-block w-1.5 h-1.5 rounded-full; }
+.st-usertext { @apply font-sans text-base text-white leading-relaxed whitespace-pre-wrap break-words; }
+.st-att-img { @apply block max-w-xs max-h-48 rounded-sm border border-zinc-800 object-contain bg-zinc-950; }
+
+/* markdown output — frameless, airy, gold signposts */
+.st-md { @apply font-sans text-base text-zinc-200 font-normal leading-relaxed space-y-5 break-words; }
+.st-md p { @apply m-0; }
+.st-md strong { @apply text-white font-semibold tracking-tight; }
+.st-md em { @apply text-zinc-300; }
+.st-md code { @apply font-mono text-[13px] text-amber-300 bg-zinc-900 border border-zinc-800 rounded-sm px-1.5 py-0.5; }
+.st-md a { @apply text-amber-400 underline decoration-amber-500/40 underline-offset-4 hover:text-amber-300; }
+.st-md ul, .st-md ol { @apply my-0 pl-6 space-y-3; }
+.st-md ul { @apply list-disc marker:text-amber-500/80; }
+.st-md ol { @apply list-decimal marker:text-amber-500/80 marker:font-mono marker:text-sm; }
+.st-md li { @apply pl-1; }
+.st-md li::marker { font-size: 1em; }
+.st-h { @apply font-sans not-italic font-semibold text-xl text-white tracking-tight m-0 pt-4; }
+.st-md > .st-h:first-child { @apply pt-0; }
+.st-media { @apply block border border-zinc-800 rounded-sm w-full max-w-sm mt-4 overflow-hidden bg-zinc-950 transition-colors hover:border-zinc-500; }
+.st-media img { @apply block w-full; }
+.st-mediarow { @apply flex flex-wrap gap-4 items-start; }
+.st-mediarow .st-media { @apply mt-4; }
+
+/* the inline spotlight slate (radar rows, converted refs, report picks) */
+.st-tag { @apply text-zinc-400 font-mono text-[10px] tracking-widest uppercase mb-2 block; }
+.st-tag::before { content: ""; @apply inline-block w-1.5 h-1.5 mr-2 align-middle bg-amber-500; }
+.st-slate { @apply flex flex-col md:flex-row gap-6 w-full items-start bg-zinc-900 border border-zinc-800 rounded-sm p-6 transition-all duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-zinc-500 hover:-translate-y-0.5 hover:scale-[1.015]; }
+.st-slate-thumb { @apply block w-full md:w-56 shrink-0 overflow-hidden rounded-sm border border-zinc-800 bg-zinc-950; }
+.st-slate-thumb img { @apply block w-full aspect-video object-cover; }
+.st-x { @apply inline-flex items-center font-mono font-semibold text-[11px] tracking-wide px-2 py-0.5 rounded-sm border border-zinc-800 text-zinc-300 bg-zinc-900/60; }
+.st-x.warm { @apply text-white border-zinc-500; }
+.st-x.hot { @apply text-white border-amber-500 bg-amber-500/20; }
+.st-figs { @apply text-xs text-zinc-500 font-mono tracking-wide; }
+.st-pill { @apply inline-flex items-center font-mono text-[10px] tracking-widest uppercase px-2 py-1 rounded-sm border border-zinc-800 text-zinc-400 bg-transparent; }
+
+/* buttons: quiet by default, gold on intent */
+.st-btn { @apply inline-flex items-center justify-center gap-2 bg-transparent border rounded-md px-3.5 py-2 font-mono text-[11px] tracking-widest uppercase transition-colors duration-200 disabled:opacity-40 border-zinc-700 text-zinc-300 hover:border-amber-500/60 hover:text-amber-400 hover:bg-amber-500/5; }
+.st-btn-gold { @apply inline-flex items-center justify-center gap-2 bg-transparent border rounded-md px-3.5 py-2 font-mono text-[11px] tracking-widest uppercase transition-colors duration-200 disabled:opacity-40 border-amber-500/50 text-amber-400 hover:bg-amber-500/10 hover:border-amber-400; }
+.st-btn-danger { @apply inline-flex items-center justify-center gap-2 bg-transparent border rounded-md px-3.5 py-2 font-mono text-[11px] tracking-widest uppercase transition-colors duration-200 disabled:opacity-40 border-red-900/60 text-red-400 hover:border-red-500/70 hover:text-red-300 hover:bg-red-500/5; }
+.st-tb { @apply bg-transparent border-0 rounded-md px-2.5 py-1.5 text-zinc-500 font-mono text-[10px] tracking-widest uppercase transition-colors hover:text-amber-400 hover:bg-transparent; }
+.st-tb.on { @apply text-amber-400; }
+.st-field { @apply w-full bg-zinc-950/60 border border-zinc-800 rounded-md px-3 py-2.5 text-sm text-zinc-200 font-sans leading-relaxed min-h-0 resize-none focus:border-amber-500/50 focus:shadow-none focus:outline-none placeholder:text-zinc-600; }
+.st-select { @apply bg-transparent border border-zinc-800 rounded-md text-zinc-300 text-xs font-mono tracking-wide px-3 py-1.5 focus:border-amber-500/50 focus:outline-none focus:shadow-none; }
+.st-select option { @apply bg-neutral-950 text-zinc-200; }
+
+/* prompt pills: loose at the top, fade out on use */
+.st-pills { @apply flex flex-wrap gap-2 overflow-hidden; max-height: 240px; transition: opacity .45s var(--ease-canvas), max-height .55s var(--ease-canvas), padding .55s var(--ease-canvas), margin .55s var(--ease-canvas); }
+.st-pills.gone { @apply opacity-0 pb-0 mb-0 pointer-events-none; max-height: 0; }
+.st-pill-btn { @apply bg-transparent border border-zinc-800 rounded-full px-4 py-2 font-sans text-[13px] text-zinc-400 transition-colors duration-200 hover:border-amber-500/50 hover:text-zinc-100 hover:bg-zinc-900/40; }
+
+/* ideas */
+.st-idea-title { @apply font-sans not-italic font-semibold text-[22px] leading-tight text-white tracking-tight; }
+.st-art { @apply aspect-video w-full rounded-sm border border-dashed border-zinc-800 bg-zinc-950 flex items-center justify-center overflow-hidden text-xs text-zinc-600 font-mono tracking-wide; }
+.st-art img { @apply w-full h-full object-cover block; }
+
+/* the radar slate inside the stream */
+.st-radar { @apply scroll-mt-32; }
+.st-feed { @apply bg-transparent border-0 rounded-md px-3 py-1.5 font-mono text-[10px] tracking-widest uppercase text-zinc-500 transition-colors hover:text-zinc-200 hover:bg-transparent; }
+.st-feed.on { @apply text-amber-400 bg-amber-500/10; }
+
+/* the input console */
+#stMsg { field-sizing: content; }
+#stMsg::placeholder { font-family: "Dancing Script", "Segoe Script", "Brush Script MT", cursive; font-size: 21px; color: #AAAAB2; opacity: 1; }   /* the one script face: the user asked for this line in cursive */
+#stSend { @apply text-zinc-600 border-0 bg-transparent; }
+#stSend[data-ready] { @apply text-amber-500 bg-amber-500/15; }
+#stSend[data-ready]:hover { @apply text-amber-300 bg-amber-500/25; }
+
+/* typing dots on obsidian */
+.st-turn .typing i { @apply bg-zinc-500; }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in-up, .animate-blur-in { animation: none; }
+}

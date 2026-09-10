@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ app_name }}</title>
+<script>(function(){try{var r=document.documentElement;r.setAttribute('data-theme',localStorage.getItem('sf_theme')||'system');r.setAttribute('data-bg',localStorage.getItem('sf_bg')||'cloudline');}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@500;600&family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/static/style.css?v=20">
+<link rel="stylesheet" href="/static/brain.css?v=2">
+<link rel="icon" href="/static/favicon.png"><link rel="apple-touch-icon" href="/static/icon-192.png">
+</head>
+<body data-app="{{ app_name }}" data-version="{{ version }}">
+<div id="login" class="login hidden">
+  <div class="card">
+    <h1>{{ app_name }}</h1>
+    <p>Enter the site password.</p>
+    <input id="pw" type="password" placeholder="password" autofocus>
+    <button id="pwgo" class="primary">Sign in</button>
+    <div id="pwerr" class="err"></div>
+  </div>
+</div>
+
+<div id="app">
+  <header class="topbar">
+    <!-- tier 1 · brand + meta line -->
+    <div class="tb-meta">
+      <div class="tb-id">
+        <img class="tb-logo" src="/static/mark.png" alt="">
+        <span class="tb-word">{{ app_name }}</span>
+        <span class="tb-ver">v{{ version }}</span>
+      </div>
+      <div class="tb-ctl">
+        <span id="quota" class="quota" title="YouTube Data API quota used today (default cap 10,000)">quota –</span>
+        <button id="syncBtn" class="ghost tb-sync">⟳ Sync</button>
+        <button id="themeBtn" class="tb-theme" title="Switch light / dark" aria-label="Switch theme">Dark</button>
+        <button class="avatar" id="acct" title="Settings" aria-label="Settings">CH</button>
+      </div>
+    </div>
+    <!-- tier 2 · fluid text navigation + a quiet global channel search -->
+    <div class="tb-nav">
+      <span class="tb-navpad"></span>
+      <nav id="tabs" class="navstrip" aria-label="Primary">
+        <button data-tab="home" class="active">Home</button><span class="nsep">/</span>
+        <button data-tab="dashboard">Dashboard</button><span class="nsep">/</span>
+        <button data-tab="channels">Channels</button><span class="nsep">/</span>
+        <button data-tab="studio">Studio</button><span class="nsep">/</span>
+        <button data-tab="calendar">Ledger</button><span class="nsep">/</span>
+        <button data-tab="lookup">Search</button><span class="nsep">/</span>
+        <button data-tab="tools">Tools</button><span class="nsep">/</span>
+        <button data-tab="alerts">Alerts<span id="alertBadge" class="badge hidden">0</span></button>
+      </nav>
+      <div class="tb-find">
+        <div class="search" id="search">
+          <span class="sicon"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></span>
+          <input id="q" type="search" placeholder="Find a channel…" autocomplete="off" spellcheck="false">
+          <div id="qres" class="qres hidden"></div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+<main>
+  <section id="tab-home" class="tab active">
+    <div class="home">
+      <div class="home-inner">
+        <img class="home-logo" src="/static/mark.png" alt="">
+        <h1 class="home-title">{{ app_name }}</h1>
+        <p class="home-tag">Insights, ideas &amp; thumbnails for creators — in one calm place.</p>
+        <div class="home-search">
+          <svg class="hs-ic" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          <input id="homeQ" type="search" placeholder="Search any YouTube channel — name, @handle or URL…" autocomplete="off" spellcheck="false">
+          <button id="homeGo" class="primary hs-go">Search</button>
+        </div>
+        <div id="homeRes" class="home-res hidden"></div>
+        <div id="homeChips" class="home-chips"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-dashboard" class="tab">
+    <div class="dash-head">
+      <div id="greet" class="greet"><h1>Your network, at a glance</h1><p>Here's how your network is doing.</p></div>
+      <div class="seg" id="daysSeg"><button data-days="7">7d</button><button data-days="28" class="on">28d</button><button data-days="90">90d</button></div>
+    </div>
+    <div id="quickActions" class="dash-launch"></div>
+    <div id="tiles" class="tiles"></div>
+    <div class="grid6040 dash-charts">
+      <div class="panel"><h3>Views vs engaged views <span class="hint">all channels, daily, official Analytics API</span></h3><div id="chartMain" class="chart"></div></div>
+      <div class="panel"><h3>Subscribers <span class="hint">cumulative net, period</span></h3><div id="chartSubs" class="chart"></div></div>
+    </div>
+    <div class="grid6040 dash-lower">
+      <div class="panel"><h3>Channels</h3><div id="chanCards" class="cards"></div></div>
+      <div class="panel"><h3>Open alerts</h3><div id="dashAlerts"></div></div>
+    </div>
+  </section>
+
+  <section id="tab-channels" class="tab">
+    <div class="chanlayout">
+      <aside id="chanRail">
+        <input id="chanSearch" type="search" placeholder="Search channels…" autocomplete="off" spellcheck="false">
+        <div id="chanList"></div>
+        <button id="linkOwnBtn" class="primary small" style="margin-top:10px" title="Sign in with the Google account that owns the channel to unlock exact analytics">＋ Link your own channel</button>
+      </aside>
+      <div id="chanMain">
+        <div class="row between">
+          <h2 id="chanTitle">Channel</h2>
+          <div class="row"><div class="seg" id="chanDays"><button data-days="28" class="on">28d</button><button data-days="90">3mo</button><button data-days="180">6mo</button><button data-days="365">1yr</button><button data-days="0">Lifetime</button></div><button id="chanSync" class="ghost">⟳ Sync this channel</button></div>
+        </div>
+        <div id="chanBody"><p class="muted">Link or import a channel in Settings, then sync.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-studio" class="tab">
+    <div class="studio-nav">
+      <button data-ssec="strategy" class="on"><svg class="ssec-ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.8 10.6c.6.5 1 1.2 1 2.1v.3h5.6v-.3c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg> Strategy brain</button>
+      <button data-ssec="predict"><svg class="ssec-ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18M7 14l4-4 3 3 5-6"/></svg> Video predictor</button>
+      <button data-ssec="review"><svg class="ssec-ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="8.5" cy="9" r="1.5"/></svg> Thumbnail review</button>
+      <button data-ssec="generate"><svg class="ssec-ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.7 4.8L18.5 9.5l-4.8 1.7L12 16l-1.7-4.8L5.5 9.5l4.8-1.7zM19 15l.6 1.7 1.7.6-1.7.6L19 20l-.6-1.5-1.7-.6 1.7-.6z"/></svg> Thumbnail generator</button>
+    </div>
+
+    <div id="ssec-strategy" class="studio-sec on">
+      <!-- STUDIO BRAIN — one centered stream. No side panels: the radar lives inline in the feed.
+           Classes are Tailwind v4 (tailwind/brain.css -> static/brain.css via build-css.cmd). -->
+      <div class="st-canvas max-w-4xl mx-auto px-6">
+
+        <!-- top line: identity · focus channel · quiet controls -->
+        <div class="flex flex-wrap items-center justify-between gap-4 pt-2 pb-8">
+          <div class="flex items-center gap-4 min-w-0">
+            <span class="text-amber-500/80 font-mono text-[10px] tracking-widest uppercase whitespace-nowrap">Studio Brain</span>
+            <select id="stChan" class="st-select max-w-[16rem]" title="Focus a channel"></select>
+          </div>
+          <div class="flex items-center gap-1">
+            <button id="stShowRadar" class="st-tb" title="Bring the outlier radar to the bottom of the stream">Radar</button>
+            <button id="stShowPrompts" class="st-tb" title="Show the quick prompts">Prompts</button>
+            <button id="stShowSettings" class="st-tb" title="Radar terms and standing notes">Settings</button>
+          </div>
+        </div>
+
+        <!-- settings sheet (collapsed) -->
+        <div id="stSettings" class="hidden pb-12 animate-fade-in-up">
+          <div class="border border-zinc-800 rounded-sm p-6 space-y-6 bg-[#1E2124]">
+            <span class="st-tag">[ RADAR // CONFIG ]</span>
+            <div class="space-y-2">
+              <div class="text-xs text-zinc-500">Niche search terms, one per line. Blank = auto from your channels' tags.</div>
+              <textarea id="rdQueries" rows="4" class="st-field" placeholder="gorilla tag&#10;roblox murder mystery 2&#10;gorilla tag horror"></textarea>
+              <div id="rdAuto" class="text-xs text-zinc-600 font-mono tracking-wide"></div>
+              <label class="flex items-center gap-2 text-xs text-zinc-400 m-0 pt-1 cursor-pointer"><input type="checkbox" id="rdShorts" class="w-auto m-0 accent-amber-500"> Also scan Shorts (doubles the search cost)</label>
+            </div>
+            <div class="space-y-2">
+              <div class="text-xs text-zinc-500">Standing notes for the brain</div>
+              <textarea id="stNotes" rows="3" class="st-field" placeholder="e.g. our channels are Gorilla Tag story/horror + Roblox compilations; never pitch reaction videos; always give a Shorts cut"></textarea>
+            </div>
+            <div class="flex flex-wrap gap-3">
+              <button id="stSaveSettings" class="st-btn-gold">Save</button>
+              <button id="stReset" class="st-btn-danger">Forget pitched ideas &amp; chat</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- quick prompts: loose at the top, fade out on use -->
+        <div id="stSuggest" class="st-pills pb-12"></div>
+
+        <!-- the stream -->
+        <div id="stLog" class="space-y-12 pb-52"></div>
+      </div>
+
+      <!-- floating console, anchored to the viewport floor -->
+      <div id="stDock" class="fixed bottom-0 left-0 right-0 z-30 bg-gradient-to-t from-[#161719] via-[#161719] to-transparent pt-10 pb-8 px-6 pointer-events-none">
+        <div class="w-full max-w-4xl mx-auto pointer-events-auto">
+          <div id="stAttach" class="flex flex-wrap gap-2 mb-3 empty:hidden"></div>
+          <div class="flex items-end gap-1 w-full bg-[#1E2124] border border-zinc-800 rounded-sm px-3 py-2 focus-within:border-amber-500/50 transition-colors">
+            <button id="stImg" class="shrink-0 bg-transparent border-0 rounded-md w-9 h-9 grid place-items-center text-zinc-500 hover:text-amber-400 hover:bg-transparent transition-colors" title="Attach an image (a thumbnail, a screenshot of your analytics…)" aria-label="Attach image">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="8.5" cy="9" r="1.5"/></svg>
+            </button>
+            <input id="stImgFile" type="file" accept="image/*" multiple hidden>
+            <textarea id="stMsg" rows="1" class="flex-1 bg-transparent! border-0! shadow-none! focus:shadow-none! focus:outline-none rounded-none px-2 py-2 min-h-0 max-h-48 resize-none text-white text-base leading-relaxed font-sans" placeholder="How may I help you…"></textarea>
+            <button id="stSend" class="shrink-0 rounded-md w-9 h-9 grid place-items-center transition-colors duration-200" title="Send (Enter)" aria-label="Send">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+            </button>
+          </div>
+          <div class="flex justify-between font-mono text-[10px] tracking-widest uppercase text-zinc-600 mt-2 px-1"><span>Enter to send · Shift+Enter for a new line</span><span id="stDockNote"></span></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="ssec-predict" class="studio-sec">
+      <div class="studio-hero"><div><h2>Video predictor</h2><p>Predicts the audience-retention (AVD) curve, the biggest drop-offs and the moments most likely to be replayed — before you publish. Paste a link, or the script for a much sharper read.</p></div></div>
+      <div class="panel">
+        <div class="row"><input id="pvSource" placeholder="YouTube video URL or ID"><button id="pvGo" class="primary">Predict</button></div>
+        <div class="row mt" style="align-items:flex-end;gap:10px">
+          <label style="margin:0;flex:1;min-width:180px">Watch an MP4 before it drops <span class="tiny">(uploaded)</span><input id="pvFile" type="file" accept="video/*"></label>
+          <label style="margin:0;flex:1;min-width:180px">…or a local file path <span class="tiny">(best for big recordings — no upload)</span><input id="pvPath" placeholder="D:\\Recordings\\my video.mp4" spellcheck="false"></label>
+          <button id="pvWatch" class="primary">Watch &amp; review</button>
+        </div>
+        <label class="mt">Script / outline <span class="tiny">(optional, for the no-video prediction)</span><textarea id="pvScript" rows="3" placeholder="Paste your script, outline or beat sheet…"></textarea></label>
+        <div id="pvProg" class="tiny mt"></div>
+      </div>
+      <div id="pvOut"></div>
+    </div>
+
+    <div id="ssec-review" class="studio-sec">
+      <div class="studio-hero"><div><h2>Thumbnail review</h2><p>Upload a thumbnail and get an AI score for clarity, contrast, colour and text at feed size — plus the fixes that matter most.</p></div></div>
+      <div class="reviewgrid">
+        <div>
+          <div class="dropzone" id="rvDrop">Drop a thumbnail here, or click to choose<input id="rvFile" type="file" accept="image/*" hidden></div>
+          <div id="rvPrev" class="gen-preview mt hidden"></div>
+          <label class="mt">Video title <span class="tiny">(optional)</span><input id="rvTitle" placeholder="the title this thumbnail is for"></label>
+          <button id="rvGo" class="primary wide mt" disabled>Review thumbnail</button>
+        </div>
+        <div id="rvOut"><p class="muted">Your review appears here.</p></div>
+      </div>
+    </div>
+
+    <div id="ssec-generate" class="studio-sec">
+      <div class="studio-hero"><div><h2>Thumbnail generator</h2><p>Generate thumbnails in any style with your own character, face or brand kept consistent. Upload references once — reuse them on every thumbnail.</p></div></div>
+      <div class="gen-layout">
+        <div class="gen-controls">
+          <h3>Style</h3><div class="style-grid" id="gnStyles"></div>
+          <label class="mt">Scene / subject<textarea id="gnSubject" rows="2" placeholder="e.g. me holding a giant check, shocked, money raining down"></textarea></label>
+          <label>Text on thumbnail <span class="tiny">(optional)</span><input id="gnText" placeholder="e.g. $1,000,000"></label>
+          <div class="refkind" style="margin-top:14px">References</div>
+          <div class="row" style="gap:8px;margin-bottom:2px"><select id="gnImportChan" style="flex:1"></select><button id="gnImport" class="ghost small" title="Pull this channel's avatar + top thumbnails in as references">⬇ Import mine</button></div>
+          <div id="gnRefs"></div>
+          <button id="gnGo" class="primary wide mt">Generate thumbnail</button>
+          <div id="gnMsg" class="msg mt"></div>
+        </div>
+        <div class="gen-stage">
+          <div class="gen-preview" id="gnPreview"><div class="ph">Your generated thumbnail appears here</div></div>
+          <h3 class="mt">Recent</h3><div class="gen-gallery" id="gnGallery"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-calendar" class="tab">
+    <div id="ledger" class="ledger"></div>
+  </section>
+
+  <section id="tab-alerts" class="tab">
+    <div class="row between"><h2>Alerts</h2><div class="row"><label class="chk"><input type="checkbox" id="alertsAll"> show dismissed</label><button id="alertsDeliver" class="ghost">Send new alerts to Discord</button></div></div>
+    <div id="alertsList"></div>
+  </section>
+
+  <section id="tab-tools" class="tab">
+    <div class="row between"><h2>Tools</h2></div>
+    <div class="toolwrap">
+      <div id="toolList" class="toollist"></div>
+      <div id="toolPane" class="panel toolpane"><p class="muted">Pick a tool.</p></div>
+    </div>
+  </section>
+
+  <section id="tab-lookup" class="tab">
+    <div id="lookup"><p class="muted">Type a channel name, @handle or URL in the search bar above. Free-text searches cost 100 quota units (handles and URLs cost 1) and are cached for a day.</p></div>
+  </section>
+
+  <section id="tab-settings" class="tab">
+    <h2>Settings</h2>
+    <div class="grid2">
+      <div class="panel">
+        <h3>Link a channel</h3>
+        <p class="muted">Google opens in a new tab. On the account chooser pick the CHANNEL (brand channels are listed separately). Repeat once per channel.</p>
+        <div class="scopes">
+          <label class="chk"><input type="checkbox" data-scope="readonly" checked disabled> read (videos, scheduled, stats)</label>
+          <label class="chk"><input type="checkbox" data-scope="analytics" checked> analytics (exact totals, engaged views)</label>
+          <label class="chk"><input type="checkbox" data-scope="monetary" checked> revenue</label>
+          <label class="chk"><input type="checkbox" data-scope="edit" checked> edit (find &amp; replace, comment replies)</label>
+        </div>
+        <div class="row"><button id="linkBtn" class="primary">Link channel with Google</button><button id="importBtn" class="ghost">Import from yt-schedule-bot</button></div>
+        <div class="mt">
+          <label>Add channels by public data <span class="tiny">(handles, URLs or IDs — one per line; no login, pulls subs / views / videos / outliers automatically)</span>
+            <textarea id="pubRefs" rows="4" placeholder="@Clutcheddd&#10;@DymbzMovies&#10;https://www.youtube.com/@RussoBloxy&#10;UC1niRThMTlRPC7rV1f8hAig"></textarea></label>
+          <div class="row"><button id="addPubBtn" class="primary">Add + pull public data</button><span id="pubMsg" class="msg"></span></div>
+        </div>
+        <details class="mt"><summary>Hosted, or the callback did not come back? Paste the code</summary>
+          <p class="muted">If the Google tab ended on a 127.0.0.1 page that would not load, copy the <code>code=</code> value from its address bar and paste it here.</p>
+          <div class="row"><input id="redeemCode" placeholder="4/0A…"><button id="redeemBtn" class="ghost">Redeem</button></div>
+        </details>
+        <div id="linkMsg" class="msg"></div>
+        <h3 class="mt">Linked channels</h3>
+        <div id="linkedList"></div>
+      </div>
+      <div class="panel">
+        <h3>Site</h3>
+        <div id="statusBox" class="kv"></div>
+        <h3 class="mt">Appearance</h3>
+        <label>Theme</label>
+        <div class="themepick" id="themePick">
+          <button data-theme-mode="light">Light</button>
+          <button data-theme-mode="dark">Dark</button>
+          <button data-theme-mode="system">System</button>
+        </div>
+        <label class="mt">Background</label>
+        <div class="bgpick" id="bgPick">
+          <button data-bg-mode="cloudline"><span class="sw" style="background:linear-gradient(120deg,#e9ebf3,#f6f8fb)"></span>Cloudline</button>
+          <button data-bg-mode="glacier"><span class="sw" style="background:linear-gradient(120deg,#e6f6fa,#f5f8fa)"></span>Glacier</button>
+          <button data-bg-mode="velvet"><span class="sw" style="background:linear-gradient(120deg,#ece8fa,#f6f5fa)"></span>Velvet</button>
+          <button data-bg-mode="aurora"><span class="sw" style="background:linear-gradient(120deg,#eafaf2,#f4f5f9)"></span>Aurora</button>
+        </div>
+        <h3 class="mt">Preferences</h3>
+        <label>Discord webhook for alerts <input id="setDiscord" placeholder="https://discord.com/api/webhooks/…"></label>
+        <label>Background sync every (minutes, 0 = manual) <input id="setSync" type="number" min="0"></label>
+        <label>Newest uploads scanned per channel <input id="setScan" type="number" min="50" max="2000"></label>
+        <label>Analytics history (days) <input id="setDays" type="number" min="28" max="365"></label>
+        <label>YouTube Data API key (optional, public reads) <input id="setYtKey" placeholder="AIza…"></label>
+        <label>Site password (empty = no login) <input id="setPw" type="password" placeholder="leave blank to keep"></label>
+        <details><summary>Google OAuth client</summary>
+          <label>Client ID <input id="setGid"></label>
+          <label>Client secret <input id="setGsec" type="password" placeholder="leave blank to keep"></label>
+          <label>Client type <select id="setGtype"><option value="desktop">desktop (any loopback port)</option><option value="web">web (registered redirect)</option></select></label>
+          <label>Base URL (redirect = base + /oauth/cb) <input id="setBase"></label>
+        </details>
+        <div class="row mt"><button id="saveSettings" class="primary">Save</button><span id="saveMsg" class="msg"></span></div>
+        <h3 class="mt">Browser extension</h3>
+        <p class="muted">In the extension popup set the site URL to <code id="extUrl"></code> and this token:</p>
+        <code id="extToken" class="tok"></code>
+        <h3 class="mt">Fix a Studio control</h3>
+        <p class="muted">When an extension ad tool says <em>"paste it to CreatorHaven"</em>, paste the copied markup here and send it — it lets us wire the exact button (no screenshot needed).</p>
+        <textarea id="extMarkup" rows="4" placeholder="Paste the copied Studio markup here…" spellcheck="false"></textarea>
+        <div class="row mt"><button id="extMarkupSave" class="primary">Send markup</button><span id="extMarkupMsg" class="msg"></span></div>
+        <h3 class="mt">Activity log</h3>
+        <pre id="logBox" class="log"></pre>
+      </div>
+    </div>
+  </section>
+</main>
+</div>
+<div id="toast" class="toast hidden"></div>
+<script src="/static/app.js?v=19"></script>
+</body>
+</html>

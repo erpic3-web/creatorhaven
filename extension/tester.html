@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>CreatorHaven — Thumbnail Tester</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="tester.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Thumbnail Tester</h1>
+    <p class="muted">Previews at real YouTube proportions. Everything stays in this tab — nothing is uploaded anywhere.</p>
+  </header>
+
+  <div class="layout">
+    <aside class="controls">
+      <div id="drop" class="drop" tabindex="0">
+        <strong>Drop 1–4 thumbnails here</strong>
+        <span class="muted">or</span>
+        <label class="btn primary">Choose files<input id="file" type="file" accept="image/*" multiple hidden></label>
+        <small class="muted">16:9 works best (1280×720). Up to 4 images become A / B / C / D.</small>
+      </div>
+      <ul id="thumbList" class="thumb-list"></ul>
+
+      <label class="field"><span>Title</span><input id="title" type="text" maxlength="100" value="I Tried The Hardest Challenge Ever (it went wrong)"></label>
+      <label class="field"><span>Channel name</span><input id="channel" type="text" maxlength="50" value="Your Channel"></label>
+      <div class="grid2">
+        <label class="field"><span>Views</span><input id="views" type="text" value="1.2M views"></label>
+        <label class="field"><span>Age</span><input id="age" type="text" value="3 days ago"></label>
+        <label class="field"><span>Duration</span><input id="duration" type="text" value="12:34"></label>
+        <label class="field"><span>Theme</span>
+          <select id="theme">
+            <option value="both">Light + dark</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <button id="shuffle" type="button" class="btn primary">Shuffle competitors</button>
+        <button id="clear" type="button" class="btn">Clear</button>
+      </div>
+      <p class="tip muted">Tip: zoom the page to 50 % or step back from the screen — if the thumbnail still reads next to the grey competitors, it works.</p>
+    </aside>
+
+    <main id="previews" class="previews">
+      <p class="empty muted">Add a thumbnail to see it in the home grid, the sidebar, search results and on a phone.</p>
+    </main>
+  </div>
+
+  <script src="lib/common.js"></script>
+  <script src="tester.js"></script>
+</body>
+</html>

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>CreatorHaven</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="head">
+    <button type="button" id="backBtn" class="iconbtn hidden" title="Back" aria-label="Back">&#8592;</button>
+    <h1 id="headTitle">CreatorHaven</h1>
+    <span class="mark">SF</span>
+    <span id="saved" class="saved">Saved</span>
+  </header>
+
+  <!-- HOME: dense typographic directory -->
+  <div id="home" class="home">
+    <button type="button" class="navrow" data-go="thumbnails"><span class="t">Thumbnails</span> <span class="d">grabber + downloader</span> <span class="arr">&#10142;</span></button>
+    <button type="button" class="navrow" data-go="youtube"><span class="t">YouTube tweaks</span> <span class="d">dates, names, feed…</span> <span class="arr">&#10142;</span></button>
+    <button type="button" class="navrow" data-go="studio"><span class="t">YouTube Studio</span> <span class="d">outliers, ads, explainers</span> <span class="arr">&#10142;</span></button>
+    <button type="button" class="navrow" data-go="appearance"><span class="t">Appearance &amp; size</span> <span class="d">accent, player, fonts</span> <span class="arr">&#10142;</span></button>
+    <button type="button" class="navrow" data-go="tester"><span class="t">Thumbnail tester</span> <span class="d">preview at feed size</span> <span class="arr">&#10142;</span></button>
+  </div>
+
+  <!-- Thumbnails -->
+  <section class="page hidden" data-page="thumbnails">
+    <div class="card">
+      <h2>On-page grabber</h2>
+      <label class="toggle"><input type="checkbox" data-key="thumbGrabber"><span class="sw"></span><span class="lbl">Grabber button on YouTube <em>click any thumbnail to save / copy</em></span></label>
+    </div>
+    <div class="card">
+      <h2>Download by link</h2>
+      <div class="row">
+        <input type="text" id="thInput" class="grow" placeholder="Video URL or ID" spellcheck="false">
+        <button type="button" id="thTab" class="btn" title="Use the video open in the current tab">This tab</button>
+      </div>
+      <div id="thResult" class="thumb-result"></div>
+    </div>
+    <div class="card">
+      <h2>On watch pages</h2>
+      <label class="toggle"><input type="checkbox" data-key="thumbDownloader"><span class="sw"></span><span class="lbl">Add a Thumbnail button on the watch page</span></label>
+    </div>
+  </section>
+
+  <!-- YouTube tweaks -->
+  <section class="page hidden" data-page="youtube">
+    <div class="card">
+      <h2>Browsing</h2>
+      <label class="toggle"><input type="checkbox" data-key="confirmSignOut"><span class="sw"></span><span class="lbl">Confirm before signing out</span></label>
+      <label class="toggle"><input type="checkbox" data-key="exactDates"><span class="sw"></span><span class="lbl">Exact upload date next to &ldquo;3 weeks ago&rdquo;</span></label>
+      <label class="toggle"><input type="checkbox" data-key="videoTags"><span class="sw"></span><span class="lbl">Video tags under the description</span></label>
+      <label class="toggle"><input type="checkbox" data-key="playlistSearch"><span class="sw"></span><span class="lbl">Search box on playlists</span></label>
+      <label class="toggle"><input type="checkbox" data-key="feedCleaner"><span class="sw"></span><span class="lbl">Hide Shorts / Playables / posts / news shelves</span></label>
+      <label class="toggle"><input type="checkbox" data-key="shortsRedirect"><span class="sw"></span><span class="lbl">Open Shorts as normal videos</span></label>
+      <label class="toggle"><input type="checkbox" data-key="realNames"><span class="sw"></span><span class="lbl">Real channel names instead of @handles</span></label>
+      <label class="toggle"><input type="checkbox" data-key="subCounts"><span class="sw"></span><span class="lbl">Subscriber badge next to names</span></label>
+      <label class="toggle"><input type="checkbox" data-key="youtubeOutliers"><span class="sw"></span><span class="lbl">Outlier multiplier next to titles <em>2.3&times; vs the channel&rsquo;s median</em></span></label>
+      <label class="toggle"><input type="checkbox" data-key="dontRecommend"><span class="sw"></span><span class="lbl">&times; &ldquo;Don&rsquo;t recommend channel&rdquo; on hover</span></label>
+      <label class="toggle"><input type="checkbox" data-key="favorites"><span class="sw"></span><span class="lbl">Favorites block in the sidebar <span id="favCount" class="pill" title="starred channels">0</span></span></label>
+    </div>
+  </section>
+
+  <!-- YouTube Studio -->
+  <section class="page hidden" data-page="studio">
+    <div class="card">
+      <h2>Panel &amp; analytics</h2>
+      <label class="toggle"><input type="checkbox" data-key="studioPanel"><span class="sw"></span><span class="lbl">CreatorHaven panel <em>floating button: decoder + research</em></span></label>
+      <label class="toggle"><input type="checkbox" data-key="studioOutlierAll"><span class="sw"></span><span class="lbl">Outlier score vs <b>all</b> your uploads (not just the last 10)</span></label>
+      <label class="toggle"><input type="checkbox" data-key="studioExplainers"><span class="sw"></span><span class="lbl">Explain metrics on hover <em>&#9432; what it means + how to read it</em></span></label>
+    </div>
+    <div class="card">
+      <h2>Ads <span class="exp">experimental</span></h2>
+      <label class="toggle"><input type="checkbox" data-key="studioAdPlacer"><span class="sw"></span><span class="lbl">Auto ad placer <em>place mid-rolls every N min</em></span></label>
+      <label class="field sub" data-dep="studioAdPlacer"><span>Interval between mid-rolls (minutes)</span><input type="number" min="1" max="60" step="1" data-key="studioAdInterval"></label>
+      <label class="toggle"><input type="checkbox" data-key="studioRemoveRedAds"><span class="sw"></span><span class="lbl">Remove unapproved (red) ad breaks button</span></label>
+      <p class="thumb-hint">These add buttons to the video&rsquo;s Monetization / Editor page; review the result before saving in Studio.</p>
+    </div>
+    <div class="card">
+      <h2>More</h2>
+      <label class="toggle"><input type="checkbox" data-key="studioDiscordButton"><span class="sw"></span><span class="lbl">Discord button in the Studio header</span></label>
+      <label class="field sub" data-dep="studioDiscordButton"><span>Discord URL</span><input type="text" data-key="discordUrl" placeholder="https://discord.gg/…" spellcheck="false"></label>
+      <label class="toggle"><input type="checkbox" data-key="streamerMode"><span class="sw"></span><span class="lbl">Streamer mode — blur every number <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd></span></label>
+    </div>
+  </section>
+
+  <!-- Appearance -->
+  <section class="page hidden" data-page="appearance">
+    <div class="card">
+      <h2>Accent &amp; font</h2>
+      <label class="toggle"><input type="checkbox" data-key="appearance"><span class="sw"></span><span class="lbl">Custom accent / font <em>best effort</em></span></label>
+      <div class="sub grid2" data-dep="appearance">
+        <label class="field"><span>Accent</span><input type="color" data-key="appearanceAccent"></label>
+        <label class="field"><span>Font family</span><input type="text" data-key="appearanceFont" placeholder="e.g. Inter" spellcheck="false"></label>
+        <label class="toggle span2"><input type="checkbox" data-key="appearanceCompact"><span class="sw"></span><span class="lbl">Compact home grid (+1 card per row)</span></label>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Size</h2>
+      <label class="toggle"><input type="checkbox" data-key="sizeCustomizer"><span class="sw"></span><span class="lbl">Player width &amp; comment font size</span></label>
+      <div class="sub grid2" data-dep="sizeCustomizer">
+        <label class="field"><span>Player width <b id="pwVal">100</b>%</span><input type="range" min="50" max="200" step="5" data-key="playerWidthPct"></label>
+        <label class="field"><span>Comment font <b id="cfVal">14</b>px</span><input type="range" min="10" max="24" step="1" data-key="commentsFontPx"></label>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tester -->
+  <section class="page hidden" data-page="tester">
+    <div class="card">
+      <h2>Thumbnail tester</h2>
+      <button type="button" id="openTester" class="btn primary wide">Open thumbnail tester</button>
+      <p class="thumb-hint">Preview a thumbnail at real feed sizes (light / dark, desktop / mobile) before you upload.</p>
+    </div>
+  </section>
+
+  <!-- retained settings kept out of the UI (self-contained client presentation) -->
+  <div hidden aria-hidden="true">
+    <input type="text" data-key="siteUrl">
+    <input type="password" data-key="token">
+    <input type="checkbox" data-key="studioProbe">
+  </div>
+
+  <script src="lib/common.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

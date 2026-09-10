@@ -1,0 +1,58 @@
+{
+  "manifest_version": 3,
+  "name": "CreatorHaven",
+  "version": "0.1.0",
+  "description": "YouTube and YouTube Studio power-up: exact upload dates, real commenter names, feed cleaner, thumbnail tools, playlist search, a Studio network probe and a thumbnail tester.",
+  "minimum_chrome_version": "121",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "studioforge@studioforge.local",
+      "strict_min_version": "128.0"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "CreatorHaven",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "background": {
+    "service_worker": "bg.js",
+    "scripts": ["lib/common.js", "bg.js"]
+  },
+  "permissions": ["storage", "alarms", "activeTab"],
+  "host_permissions": [
+    "http://127.0.0.1:5800/*",
+    "http://localhost:5800/*",
+    "https://i.ytimg.com/*",
+    "https://yt3.ggpht.com/*"
+  ],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["lib/common.js", "content/yt.js", "content/thumbgrab.js", "content/outlier.js"],
+      "css": ["content/yt.css", "content/thumbgrab.css", "content/outlier.css"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://studio.youtube.com/*"],
+      "js": ["lib/common.js", "content/studio.js", "content/studio_features.js"],
+      "css": ["content/studio.css", "content/studio_features.css"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://studio.youtube.com/*"],
+      "js": ["content/studio_probe_main.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ]
+}

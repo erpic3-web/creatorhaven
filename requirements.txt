@@ -1,0 +1,4 @@
+flask>=3.0
+pillow>=10
+gunicorn>=22
+psycopg[binary]>=3.1

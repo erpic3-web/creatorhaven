@@ -1,0 +1,7 @@
+{
+  "name": "studioforge-brain-css",
+  "private": true,
+  "description": "Compiles tailwind/brain.css -> static/brain.css for the Studio Brain canvas. Run ..\build-css.cmd",
+  "scripts": { "build": "tailwindcss -i brain.css -o ../static/brain.css --minify" },
+  "devDependencies": { "@tailwindcss/cli": "^4.3.3", "tailwindcss": "^4.3.3" }
+}

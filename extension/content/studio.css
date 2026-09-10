@@ -1,0 +1,24 @@
+/* CreatorHaven — studio.youtube.com styles. "Creator Ledger" steel tabs, sans only.
+ * Studio renders inside shadow roots, so the Discord tab and blur spans are ALSO styled
+ * inline from content/studio.js; these rules cover the light-DOM cases (floating fallback, toast). */
+
+.sf-blur { filter: blur(6px) !important; user-select: none; }
+
+.sf-discord-pill {
+  display: inline-flex; align-items: center; height: 32px; padding: 0 12px; margin-right: 12px;
+  border-radius: 2px; border: 1px solid #27272A; text-decoration: none; background: #1E2124; color: #FFFFFF;
+  font: 600 11px "Space Grotesk", "Inter", system-ui, Arial, sans-serif; text-transform: uppercase; letter-spacing: .14em; white-space: nowrap;
+  transition: all .2s cubic-bezier(.16,1,.3,1);
+}
+.sf-discord-pill:hover { border-color: #71717A; transform: translateY(-2px) scale(1.015); }
+.sf-discord-floating { position: fixed; top: 10px; right: 140px; z-index: 2147483000; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
+
+.sf-toast {
+  position: fixed; left: 50%; bottom: 40px;
+  transform: translateX(-50%) translateY(12px);
+  background: #1E2124; color: #FFFFFF; border: 1px solid #27272A; padding: 10px 16px; border-radius: 2px;
+  font: 500 13px/1.3 "Inter", system-ui, Arial, sans-serif; letter-spacing: -.01em; z-index: 2147483000;
+  opacity: 0; pointer-events: none; transition: all .2s cubic-bezier(.16,1,.3,1);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+}
+.sf-toast-show { opacity: 1; transform: translateX(-50%) translateY(0); }

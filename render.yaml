@@ -1,0 +1,38 @@
+# Render blueprint for CreatorHaven — New + Blueprint on render.com, or create the web service
+# by hand with the same values. The extension keeps talking to the LOCAL site; this is the
+# hosted dashboard/brain/ledger.
+services:
+  - type: web
+    name: creatorhaven
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -w 1 --threads 8 -t 600 -b 0.0.0.0:$PORT wsgi:app
+    healthCheckPath: /api/status
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: EXT_TOKEN
+        generateValue: true
+      - key: SITE_PASSWORD
+        sync: false            # set in the dashboard: the login gate
+      - key: GEMINI_API_KEY
+        sync: false            # strategy brain, predictor, thumbnail review/generator
+      - key: YOUTUBE_API_KEY
+        sync: false            # optional: public lookups + the niche radar without OAuth
+      - key: GOOGLE_CLIENT_ID
+        sync: false            # the yt-schedule-bot desktop client (paste-the-code linking)
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_CLIENT_TYPE
+        value: desktop
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
+      - key: DATABASE_URL
+        sync: false            # paste the INTERNAL connection string of the workspace's Postgres
+                               # (Render allows one free database per workspace; the site keeps its
+                               # backup in its own table `sf_sqlite_backup`, nothing else is touched)
+      - key: SF_NO_PERSIST
+        value: "1"             # never write data/config.json on the ephemeral disk

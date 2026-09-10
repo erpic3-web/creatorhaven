@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{{ app_name }}</title>
+<meta name="theme-color" content="#0b0b0c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="{{ app_name }}">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=Dancing+Script:wght@500;600&family=Space+Grotesk:wght@500;600&display=swap">
+<style>
+:root { --bg:#0b0b0c; --panel:#131315; --panel2:#1a1a1d; --line:#26262a; --line2:#333338; --text:#f2f2f3; --muted:#9a9aa3; --dim:#6b6b73;
+  --gold:#d4af37; --gold-soft:rgba(212,175,55,.14); --bad:#e5484d; --good:#3dd68c; --radius:14px;
+  --font:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif; --serif:"Instrument Serif",Georgia,serif; --mono:"Space Grotesk",ui-monospace,monospace;
+  --tabs:64px; --sat:env(safe-area-inset-top,0px); --sab:env(safe-area-inset-bottom,0px); }
+* { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html, body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 var(--font); overscroll-behavior-y:none; }
+body { padding-bottom:calc(var(--tabs) + var(--sab)); min-height:100vh; }
+button, input, select, textarea { font:inherit; color:inherit; }
+button { background:var(--panel2); border:1px solid var(--line2); border-radius:10px; padding:9px 13px; cursor:pointer; font-weight:600; font-size:13px; }
+button.primary { background:var(--gold); border-color:var(--gold); color:#141108; }
+button.ghost { background:transparent; }
+button:disabled { opacity:.5; }
+input, select, textarea { background:var(--panel2); border:1px solid var(--line2); border-radius:10px; padding:10px 12px; width:100%; }
+textarea { resize:none; }
+a { color:var(--gold); text-decoration:none; }
+.hidden { display:none !important; }
+/* header */
+.hdr { position:sticky; top:0; z-index:20; background:linear-gradient(var(--bg) 70%, rgba(11,11,12,0)); padding:calc(10px + var(--sat)) 16px 10px; display:flex; align-items:center; gap:10px; }
+.mark { width:34px; height:34px; border-radius:0; background:none; flex:none; object-fit:contain; }
+.hdr h1 { margin:0; font:italic 400 22px var(--serif); letter-spacing:-.01em; flex:1; }
+.hdr select { width:auto; max-width:46vw; padding:7px 28px 7px 10px; font-size:12px; border-radius:20px; appearance:none; background:var(--panel2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%239a9aa3' fill='none'/%3E%3C/svg%3E") no-repeat right 10px center; }
+.view { display:none; padding:4px 16px 24px; }
+.view.on { display:block; animation:up .25s ease; }
+@keyframes up { from { opacity:0; transform:translateY(6px);} to { opacity:1; transform:none;} }
+h2 { font:italic 400 26px var(--serif); margin:6px 0 10px; }
+h3 { font:600 11px var(--mono); letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin:18px 0 8px; }
+.muted { color:var(--muted); } .small { font-size:12px; } .err { color:var(--bad); }
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:14px; margin-bottom:10px; }
+.tiles { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.tile { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px; }
+.tile .k { font:600 10px var(--mono); letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+.tile .v { font:500 26px var(--serif); margin-top:2px; }
+.tile .s { font-size:11px; color:var(--dim); }
+.row { display:flex; gap:8px; align-items:center; }
+.chan { display:flex; gap:10px; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); }
+.chan img { width:40px; height:40px; border-radius:50%; background:var(--panel2); }
+.chan .t { font-weight:600; font-size:14px; } .chan .s { font-size:12px; color:var(--muted); }
+.pill { display:inline-block; font:600 10px var(--mono); letter-spacing:.06em; padding:2px 8px; border-radius:20px; border:1px solid var(--line2); color:var(--muted); }
+.pill.gold { color:var(--gold); border-color:rgba(212,175,55,.45); background:var(--gold-soft); }
+/* brain */
+#vBrain { padding-bottom:110px; }
+.chips { display:flex; gap:8px; overflow-x:auto; padding:4px 0 10px; scrollbar-width:none; }
+.chips::-webkit-scrollbar { display:none; }
+.chips button { flex:none; border-radius:20px; background:var(--panel); color:var(--muted); font-weight:500; }
+.turn { margin:18px 0; }
+.who { font:600 10px var(--mono); letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin-bottom:6px; display:flex; align-items:center; gap:6px; }
+.who i { width:6px; height:6px; border-radius:50%; background:var(--gold); display:inline-block; }
+.turn.user .who i { background:var(--dim); }
+.turn.user .body { background:var(--panel2); border:1px solid var(--line); border-radius:14px 14px 4px 14px; padding:10px 13px; }
+.md p { margin:6px 0; } .md h4 { font:italic 400 21px var(--serif); color:var(--gold); margin:14px 0 4px; }
+.md ul, .md ol { padding-left:20px; margin:6px 0; } .md li { margin:3px 0; } .md li::marker { color:var(--gold); }
+.md b { color:#fff; }
+.cursive { font-family:"Dancing Script","Segoe Script",cursive; font-size:24px; color:#fff; }
+.media { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; }
+.media img { width:46%; border-radius:8px; border:1px solid var(--line2); }
+.slate { border:1px solid var(--line2); border-radius:12px; padding:10px; margin:8px 0; background:var(--panel); }
+.slate .lab { font:600 9px var(--mono); letter-spacing:.14em; color:var(--gold); margin-bottom:8px; }
+.slate .top { display:flex; gap:10px; }
+.slate img { width:112px; border-radius:8px; border:1px solid var(--line2); align-self:flex-start; }
+.slate .tt { font-size:13px; font-weight:600; line-height:1.3; }
+.slate .ss { font-size:11px; color:var(--muted); margin:3px 0 6px; }
+.x { font:700 11px var(--mono); padding:1px 7px; border-radius:20px; border:1px solid var(--line2); }
+.x.warm { color:#f2a33a; border-color:rgba(242,163,58,.5); } .x.hot { color:var(--gold); border-color:rgba(212,175,55,.6); background:var(--gold-soft); }
+.typing i { display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--gold); margin-right:4px; animation:blink 1s infinite; }
+.typing i:nth-child(2) { animation-delay:.2s } .typing i:nth-child(3) { animation-delay:.4s }
+@keyframes blink { 0%,80%,100% { opacity:.2 } 40% { opacity:1 } }
+.idea { border:1px solid var(--line2); border-radius:14px; padding:14px; margin:12px 0; background:var(--panel); }
+.idea .title { font:italic 400 22px var(--serif); line-height:1.15; }
+.idea .pills { display:flex; gap:6px; flex-wrap:wrap; margin:8px 0; }
+.idea p { margin:6px 0; font-size:13.5px; }
+.idea .ref { display:flex; gap:10px; align-items:center; margin-top:8px; } .idea .ref img { width:120px; border-radius:8px; border:1px solid var(--line2); }
+.art { aspect-ratio:16/9; border:1px dashed var(--line2); border-radius:10px; display:grid; place-items:center; overflow:hidden; margin:10px 0 8px; background:var(--panel2); color:var(--dim); font-size:12px; }
+.art img { width:100%; height:100%; object-fit:cover; display:block; }
+.composer { position:fixed; left:0; right:0; bottom:calc(var(--tabs) + var(--sab)); padding:10px 12px; background:linear-gradient(rgba(11,11,12,0), var(--bg) 30%); display:none; gap:8px; align-items:flex-end; z-index:15; }
+.composer.on { display:flex; }
+.composer textarea { border-radius:16px; min-height:46px; max-height:140px; padding:12px 14px; field-sizing:content; }
+.composer textarea::placeholder { font-family:"Dancing Script","Segoe Script",cursive; font-size:19px; color:var(--muted); }
+.composer button { width:46px; height:46px; border-radius:50%; padding:0; flex:none; display:grid; place-items:center; }
+/* radar */
+.rd { display:flex; gap:10px; padding:10px 0; border-bottom:1px solid var(--line); }
+.rd img { width:110px; aspect-ratio:16/9; object-fit:cover; border-radius:8px; border:1px solid var(--line2); flex:none; }
+.rd .t { font-size:13px; font-weight:600; line-height:1.3; } .rd .s { font-size:11px; color:var(--muted); margin:3px 0 6px; }
+.seg { display:flex; gap:6px; margin:8px 0 4px; } .seg button { flex:1; color:var(--muted); } .seg button.on { color:var(--text); border-color:var(--gold); }
+/* plan + alerts */
+.day { margin:10px 0; } .day .d { font:600 11px var(--mono); letter-spacing:.1em; color:var(--gold); margin-bottom:4px; }
+.ev { display:flex; gap:8px; align-items:center; padding:6px 0; border-bottom:1px solid var(--line); font-size:13px; }
+.ev img { width:56px; border-radius:6px; }
+.al { padding:10px 0; border-bottom:1px solid var(--line); } .al .t { font-weight:600; font-size:14px; } .al .m { font-size:12.5px; color:var(--muted); }
+.al .sev { font:600 9px var(--mono); letter-spacing:.1em; text-transform:uppercase; }
+/* tabs */
+.tabs { position:fixed; left:0; right:0; bottom:0; height:calc(var(--tabs) + var(--sab)); padding-bottom:var(--sab); background:rgba(19,19,21,.96); backdrop-filter:blur(12px); border-top:1px solid var(--line); display:flex; z-index:30; }
+.tabs button { flex:1; background:none; border:0; border-radius:0; color:var(--dim); font:500 10px var(--mono); letter-spacing:.06em; text-transform:uppercase; display:flex; flex-direction:column; align-items:center; gap:4px; padding:10px 0 6px; }
+.tabs button svg { width:22px; height:22px; stroke:currentColor; fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.tabs button.on { color:var(--gold); }
+/* login */
+.login { position:fixed; inset:0; background:var(--bg); z-index:50; display:grid; place-items:center; padding:24px; }
+.login .card { width:100%; max-width:360px; }
+.toast { position:fixed; left:50%; bottom:calc(var(--tabs) + var(--sab) + 12px); transform:translateX(-50%); background:#fff; color:#111; padding:9px 14px; border-radius:20px; font-size:13px; font-weight:600; z-index:60; box-shadow:0 8px 30px rgba(0,0,0,.5); }
+</style>
+</head>
+<body>
+<div id="login" class="login hidden"><div class="card panel">
+  <img class="mark" src="/static/mark.png" alt="" style="margin-bottom:10px">
+  <h2 style="margin-top:0">{{ app_name }}</h2>
+  <p class="muted small">Enter the site password to open the studio.</p>
+  <input id="pw" type="password" placeholder="Password" autocomplete="current-password">
+  <button id="pwGo" class="primary" style="width:100%;margin-top:10px">Open</button>
+  <p id="pwErr" class="err small"></p>
+</div></div>
+
+<header class="hdr"><img class="mark" src="/static/mark.png" alt=""><h1 id="hTitle">Studio Brain</h1><select id="focus" title="Focus channel"><option value="">All channels</option></select></header>
+
+<section id="vHome" class="view">
+  <h2>Network</h2>
+  <div id="homeTiles" class="tiles"></div>
+  <h3>Channels</h3>
+  <div id="homeChans"></div>
+</section>
+
+<section id="vBrain" class="view on">
+  <div id="chips" class="chips"></div>
+  <div id="stream"></div>
+</section>
+
+<section id="vRadar" class="view">
+  <h2>Outlier radar</h2>
+  <div id="rdMeta" class="muted small"></div>
+  <div class="seg"><button data-feed="niche" class="on">Beyond the network</button><button data-feed="network">Inside</button></div>
+  <div id="rdList"></div>
+  <div class="row" style="margin-top:12px"><button id="rdRefresh">Refresh radar</button><label class="small muted row" style="gap:6px"><input type="checkbox" id="rdShorts" style="width:auto"> Shorts too</label></div>
+</section>
+
+<section id="vPlan" class="view">
+  <h2>Plan</h2>
+  <div class="panel"><div class="row"><input id="plTitle" placeholder="Planned video title"><input id="plDay" type="date" style="width:150px"></div>
+    <button id="plAdd" class="primary" style="margin-top:8px;width:100%">Add to plan</button></div>
+  <h3>Your plan</h3><div id="plList"></div>
+  <h3>Scheduled uploads (next 14 days)</h3><div id="plCal"></div>
+</section>
+
+<section id="vAlerts" class="view">
+  <h2>Alerts</h2>
+  <div id="alList"></div>
+</section>
+
+<div id="composer" class="composer on">
+  <textarea id="msg" rows="1" placeholder="How may I help you…"></textarea>
+  <button id="send" class="primary" aria-label="Send"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+</div>
+
+<nav class="tabs">
+  <button data-v="Home"><svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>Home</button>
+  <button data-v="Brain" class="on"><svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.8 10.6c.6.5 1 1.2 1 2.1v.3h5.6v-.3c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg>Brain</button>
+  <button data-v="Radar"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 3v9l6 4"/></svg>Radar</button>
+  <button data-v="Plan"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Plan</button>
+  <button data-v="Alerts"><svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 21h4"/></svg>Alerts</button>
+</nav>
+<div id="toast" class="toast hidden"></div>
+
+<script>
+(() => {
+  const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const fmt = n => n == null ? '–' : Math.abs(n) >= 1e9 ? (n / 1e9).toFixed(1).replace(/\.0$/, '') + 'B' : Math.abs(n) >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M' : Math.abs(n) >= 1e3 ? (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K' : String(Math.round(n));
+  const ago = ts => { if (!ts) return 'never'; const s = Date.now() / 1000 - ts; return s < 90 ? 'just now' : s < 5400 ? Math.round(s / 60) + ' min ago' : s < 172800 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' d ago'; };
+  const YT = id => `https://www.youtube.com/watch?v=${id}`;
+  const toast = m => { const t = $('#toast'); t.textContent = m; t.classList.remove('hidden'); clearTimeout(t._t); t._t = setTimeout(() => t.classList.add('hidden'), 3200); };
+  const api = async (path, opts = {}) => {
+    const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', ...opts, body: opts.body && typeof opts.body !== 'string' ? JSON.stringify(opts.body) : opts.body });
+    let j = {}; try { j = await r.json(); } catch (e) { /* non-json */ }
+    if (r.status === 401) { $('#login').classList.remove('hidden'); }
+    if (!r.ok && !j.error) j.error = `HTTP ${r.status}`;
+    return j;
+  };
+  const focus = () => $('#focus').value || null;
+  const state = { rdFeed: 'niche', radar: null, chans: [] };
+
+  // ---- login gate
+  $('#pwGo').onclick = async () => { const j = await api('/api/login', { method: 'POST', body: { password: $('#pw').value } }); if (j.ok) { $('#login').classList.add('hidden'); boot(); } else $('#pwErr').textContent = j.error || 'wrong password'; };
+  $('#pw').addEventListener('keydown', e => { if (e.key === 'Enter') $('#pwGo').click(); });
+
+  // ---- tabs
+  const TITLES = { Home: 'CreatorHaven', Brain: 'Studio Brain', Radar: 'Outlier radar', Plan: 'Plan', Alerts: 'Alerts' };
+  function show(v) {
+    $$('.view').forEach(x => x.classList.toggle('on', x.id === 'v' + v));
+    $$('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+    $('#composer').classList.toggle('on', v === 'Brain');
+    $('#hTitle').textContent = TITLES[v];
+    ({ Home: loadHome, Radar: loadRadar, Plan: loadPlan, Alerts: loadAlerts })[v]?.();
+    try { localStorage.setItem('sf_m_tab', v); } catch (e) { /* ignore */ }
+    if (v === 'Brain') requestAnimationFrame(() => window.scrollTo(0, document.documentElement.scrollHeight));   // latest turn first
+    else window.scrollTo(0, 0);
+  }
+  $$('.tabs button').forEach(b => b.onclick = () => show(b.dataset.v));
+
+  // ---- home
+  async function loadHome() {
+    const j = await api('/api/overview?days=28');
+    const c = j.combined || {}, t = j.totals || {};
+    $('#homeTiles').innerHTML = [
+      ['Subscribers', fmt(c.subscribers), (j.channels || []).length + ' channels'],
+      ['Views · 28d', fmt(t.views), 'across the network'],
+      ['Lifetime views', fmt(c.views), ''],
+      ['Videos', fmt(c.videos), 'uploads tracked'],
+    ].map(([k, v, s]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${esc(s)}</div></div>`).join('');
+    const chans = (j.channels || []).slice().sort((a, b) => (b.stats?.subscribers || 0) - (a.stats?.subscribers || 0));
+    $('#homeChans').innerHTML = chans.map(ch => `<div class="chan" data-c="${ch.channel_id}"><img src="${esc(ch.thumb || '')}" alt=""><div style="flex:1;min-width:0"><div class="t">${esc(ch.title)}</div><div class="s">${fmt(ch.stats?.subscribers)} subs · ${fmt(ch.stats?.views)} views · ${ch.stats?.videos || '–'} videos</div></div><span class="pill">${ch.analytics ? 'linked' : 'public'}</span></div>`).join('') || '<p class="muted">No channels tracked yet. Add them on the desktop site.</p>';
+    $$('#homeChans .chan').forEach(el => el.onclick = () => { $('#focus').value = el.dataset.c; show('Brain'); toast('Focused: ' + $('#focus').selectedOptions[0]?.text); });
+  }
+
+  // ---- markdown -> stream
+  const THUMB_RE = /\[thumb:([A-Za-z0-9_-]{11})\]/g;
+  const inline = s => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(^|\s)_(.+?)_(?=\s|$)/g, '$1<i>$2</i>');
+  function radarRow(id) { const d = state.radar; if (!d) return null; for (const k of ['niche', 'network']) { const r = (d[k] || []).find(x => x.video_id === id); if (r) return r; } return null; }
+  function mediaCards(ids) {
+    return ids.map(id => { const r = radarRow(id); if (r) return slate(r); return `<div class="media"><a href="${YT(id)}" target="_blank" rel="noopener"><img src="https://i.ytimg.com/vi/${id}/mqdefault.jpg" alt=""></a></div>`; }).join('');
+  }
+  function slate(r) {
+    return `<div class="slate"><div class="lab">[ OUTLIER_RADAR // TARGET_IDENTIFIED ]</div><div class="top"><a href="${YT(r.video_id)}" target="_blank" rel="noopener"><img src="${esc(r.thumb)}" alt=""></a><div style="min-width:0"><span class="x ${r.outlier >= 10 ? 'hot' : r.outlier >= 4 ? 'warm' : ''}">${r.outlier}×</span> <span class="small muted">${esc(r.channel || '')}${r.subs ? ' · ' + fmt(r.subs) : ''}</span><div class="tt">${esc(r.title)}</div><div class="ss">${fmt(r.views)} views${r.median ? ' vs ~' + fmt(r.median) + ' normal' : ''} · ${Math.round(r.age_days)}d</div><button class="small" data-convert="${r.video_id}">Convert →</button></div></div></div>`;
+  }
+  function renderMd(text) {
+    const src = String(text || '').replace(/\[\[\s*pitched\s*:[^\]]*\]\]\s*$/i, '').replace(/\r/g, '');
+    const out = []; let para = [], list = null, lt = '', ids = [];
+    const grab = s => s.replace(THUMB_RE, (_, id) => { ids.push(id); return ''; }).trim();
+    const fm = () => { if (ids.length) { out.push(mediaCards(ids)); ids = []; } };
+    const fp = () => { if (para.length) { out.push(`<p>${para.map(inline).join('<br>')}</p>`); para = []; } };
+    const fl = () => { if (list) { out.push(`<${lt}>${list.map(li => `<li>${inline(li)}</li>`).join('')}</${lt}>`); list = null; } };
+    for (const raw of src.split('\n')) {
+      const line = grab(raw);
+      const h = /^#{1,4}\s+(.+)$/.exec(line), ul = /^[-*•]\s+(.+)$/.exec(line), ol = /^\d+[.)]\s+(.+)$/.exec(line);
+      if (!line || /^([-*_]\s*){3,}$/.test(line)) { fp(); fl(); fm(); continue; }
+      if (h) { fp(); fl(); fm(); out.push(`<h4>${inline(h[1])}</h4>`); continue; }
+      if (ul || ol) { fp(); const t = ul ? 'ul' : 'ol'; if (list && lt !== t) fl(); if (!list) { list = []; lt = t; } list.push((ul || ol)[1]); continue; }
+      if (list) { fl(); fm(); }
+      para.push(line);
+    }
+    fp(); fl(); fm();
+    return out.join('');
+  }
+  function turn(role, html) {
+    const d = document.createElement('div'); d.className = 'turn ' + (role === 'user' ? 'user' : 'ai');
+    d.innerHTML = `<div class="who"><i></i>${role === 'user' ? 'You' : 'Studio Brain'}</div><div class="body">${html}</div>`;
+    $('#stream').appendChild(d); wireConverts(d); return d;
+  }
+  const body = d => $('.body', d);
+  const toBottom = () => requestAnimationFrame(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' }));
+  const wireConverts = root => $$('[data-convert]', root).forEach(b => b.onclick = () => { show('Brain'); pitchIdeas(b.dataset.convert); });
+  const history = [];
+  let brainLoaded = false;
+  async function loadBrain() {
+    if (brainLoaded) return; brainLoaded = true;
+    const [h, r] = await Promise.all([api('/api/strategy/history'), api('/api/strategy/radar')]);
+    state.radar = r.radar;
+    (h.history || []).forEach(t => { history.push({ role: t.role, text: t.text }); turn(t.role === 'user' ? 'user' : 'ai', t.role === 'user' ? esc(t.text) : `<div class="md">${renderMd(t.text)}</div>`); });
+    if (!$('#stream').childElementCount) turn('ai', `<div class="md"><p><span class="cursive">How may I help you…</span></p><p class="muted">I read the outlier radar first, then turn what is hitting into ideas, titles and thumbnails in your voice. Tap a prompt or just ask.</p></div>`);
+    const chips = [
+      ['Convert the top outliers into 5 ideas', () => pitchIdeas()],
+      ['What is hitting right now?', () => report()],
+      ['Punchier titles for my newest upload', () => quick('Take my newest upload and give me 6 punchier titles. Use the outlier radar to justify each structure.')],
+      ['Thumbnail concepts', () => quick('Give me 3 thumbnail concepts for my next video, each built on a different outlier pattern from the radar: subject, emotion, text, colors.')],
+      ['Where is this channel stuck?', () => quick('Diagnose this channel like a strategist: what is working, what is not, which outlier patterns it should run as a series, and a 4-week plan.')],
+    ];
+    $('#chips').innerHTML = chips.map((c, i) => `<button data-i="${i}">${esc(c[0])}</button>`).join('');
+    $$('#chips button').forEach(b => b.onclick = () => chips[+b.dataset.i][1]());
+  }
+  function quick(t) { $('#msg').value = t; send(); }
+  async function send() {
+    const m = $('#msg').value.trim(); if (!m) return;
+    $('#msg').value = '';
+    turn('user', esc(m)); history.push({ role: 'user', text: m });
+    const d = turn('ai', '<span class="typing"><i></i><i></i><i></i></span>'); toBottom();
+    const j = await api('/api/strategy/chat', { method: 'POST', body: { history: history.slice(0, -1), message: m, channel_id: focus() } });
+    if (j.ok) { body(d).innerHTML = `<div class="md">${renderMd(j.reply)}</div>`; history.push({ role: 'model', text: j.reply }); wireConverts(d); }
+    else body(d).innerHTML = `<span class="err">${esc(j.error || 'failed')}</span>`;
+    toBottom();
+  }
+  $('#send').onclick = send;
+  $('#msg').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !/Mobi|Android/i.test(navigator.userAgent)) { e.preventDefault(); send(); } });
+
+  const STYLES = ['gaming', 'mrbeast', 'reaction', 'horror', 'cinematic', 'clean', 'versus', 'vlog', 'explainer'];
+  async function pitchIdeas(seed) {
+    turn('user', esc(seed ? 'Convert this outlier into 5 angles' : 'Convert the top outliers into 5 ideas'));
+    const d = turn('ai', '<span class="typing"><i></i><i></i><i></i></span>'); toBottom();
+    const j = await api('/api/strategy/ideas', { method: 'POST', body: { channel_id: focus(), n: 5, seed_video: seed || null } });
+    if (!j.ok) { body(d).innerHTML = `<span class="err">${esc(j.error || 'failed')}</span>`; return; }
+    d._ideas = j.ideas;
+    body(d).innerHTML = `<div class="md"><p class="muted small">${j.ideas.length} pitches. Every title is remembered, so the next batch will be different.</p></div>` + j.ideas.map((it, i) => `
+      <div class="idea" data-i="${i}"><div class="title">${esc(it.title)}</div>
+        <div class="pills">${[it.channel, it.format, it.mechanism].filter(Boolean).map(p => `<span class="pill">${esc(p)}</span>`).join('')}</div>
+        ${it.hook ? `<p><b>Hook:</b> ${esc(it.hook)}</p>` : ''}${it.why ? `<p><b>Why:</b> ${esc(it.why)}</p>` : ''}
+        ${it.thumbnail ? `<p><b>Thumbnail:</b> ${esc(it.thumbnail)}${it.thumb_text ? ` (text: <b>${esc(it.thumb_text)}</b>)` : ''}</p>` : ''}
+        ${it.ref_id ? `<div class="ref"><a href="${YT(it.ref_id)}" target="_blank" rel="noopener"><img src="https://i.ytimg.com/vi/${it.ref_id}/mqdefault.jpg" alt=""></a><div class="muted small">Pattern: ${esc(it.ref_pattern || '')}</div></div>` : ''}
+        <div class="art" id="art${i}">No thumbnail painted yet</div>
+        <div class="row"><select data-style="${i}" style="flex:1">${STYLES.map(s => `<option>${s}</option>`).join('')}</select><button class="primary" data-paint="${i}">Paint</button><button data-plan="${i}">Plan</button></div>
+      </div>`).join('');
+    $$('[data-paint]', d).forEach(b => b.onclick = () => paint(d, +b.dataset.paint));
+    $$('[data-plan]', d).forEach(b => b.onclick = async () => { const it = d._ideas[+b.dataset.plan]; const day = prompt('Post on which day? (YYYY-MM-DD)', new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10)); if (!day) return; const r = await api('/api/plan', { method: 'POST', body: { day, title: it.title, channel_id: focus(), note: (it.hook || '') + (it.thumbnail ? '\nThumb: ' + it.thumbnail : '') } }); toast(r.ok ? 'Added to the plan' : (r.error || 'failed')); });
+    toBottom();
+  }
+  async function paint(d, i) {
+    const it = d._ideas[i], box = $('#art' + i, d), btn = $(`[data-paint="${i}"]`, d);
+    btn.disabled = true; btn.textContent = 'Painting…'; box.innerHTML = '<span class="typing"><i></i><i></i><i></i></span>';
+    const r = await api('/api/strategy/thumb', { method: 'POST', body: { idea: it, style: $(`[data-style="${i}"]`, d).value } });
+    btn.disabled = false; btn.textContent = 'Paint again';
+    box.innerHTML = r.ok ? `<a href="${r.url}" target="_blank"><img src="${r.url}" alt=""></a>` : `<span class="err">${esc(r.error || 'failed')}</span>`;
+  }
+  async function report() {
+    turn('user', 'What is hitting right now, and why?');
+    const d = turn('ai', '<span class="typing"><i></i><i></i><i></i></span>'); toBottom();
+    const j = await api('/api/strategy/report', { method: 'POST', body: { channel_id: focus() } });
+    if (!j.ok) { body(d).innerHTML = `<span class="err">${esc(j.error || 'failed')}</span>`; return; }
+    body(d).innerHTML = `<div class="md">${(j.trends || []).length ? `<h4>Trends across them</h4><ul>${j.trends.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}` +
+      j.picks.map(p => { const r = radarRow(p.video_id) || { video_id: p.video_id, title: p.title, channel: p.channel, outlier: parseFloat(p.multiple) || 0, views: null, age_days: 0, thumb: `https://i.ytimg.com/vi/${p.video_id}/mqdefault.jpg` };
+        return slate(r) + `<p><b>Why it hit:</b> ${esc(p.why || '')}</p><p><b>How we would convert it:</b> ${esc(p.convert || '')}</p>`; }).join('') + '</div>';
+    wireConverts(d); toBottom();
+  }
+
+  // ---- radar
+  async function loadRadar() {
+    const j = await api('/api/strategy/radar'); state.radar = j.radar; renderRadar();
+    if (j.running) pollRadar();
+  }
+  function renderRadar() {
+    const d = state.radar;
+    if (!d) { $('#rdMeta').textContent = 'Not built yet. Tap Refresh radar.'; $('#rdList').innerHTML = ''; return; }
+    const rows = (d[state.rdFeed] || []).filter(r => state.rdFeed !== 'niche' || !r.tracked);
+    $('#rdMeta').innerHTML = `Built ${esc(ago(d.ts))} · last ${d.days} days · ${d.network?.length || 0} in-network, ${d.niche?.length || 0} niche${d.error ? `<br><span class="err">${esc(d.error)}</span>` : ''}`;
+    $('#rdList').innerHTML = rows.slice(0, 40).map(r => `<div class="rd"><a href="${YT(r.video_id)}" target="_blank" rel="noopener"><img src="${esc(r.thumb)}" alt="" loading="lazy"></a><div style="min-width:0;flex:1"><span class="x ${r.outlier >= 10 ? 'hot' : r.outlier >= 4 ? 'warm' : ''}">${r.outlier}×</span> <span class="small muted">${esc(r.channel || '')}${r.subs ? ' · ' + fmt(r.subs) : ''}</span><div class="t">${esc(r.title)}</div><div class="s">${fmt(r.views)} views${r.median ? ' vs ~' + fmt(r.median) : ''} · ${Math.round(r.age_days)}d · ${r.is_short ? 'short' : 'long'}</div><button class="small" data-convert="${r.video_id}">Convert →</button></div></div>`).join('') || '<p class="muted">Nothing above 2× in this feed yet.</p>';
+    wireConverts($('#rdList'));
+  }
+  $$('.seg button').forEach(b => b.onclick = () => { state.rdFeed = b.dataset.feed; $$('.seg button').forEach(x => x.classList.toggle('on', x === b)); renderRadar(); });
+  $('#rdRefresh').onclick = async () => { const r = await api('/api/strategy/radar/refresh', { method: 'POST', body: { days: 45, formats: $('#rdShorts').checked ? ['long', 'short'] : ['long'] } }); if (!r.ok) return toast(r.error || 'failed'); $('#rdRefresh').disabled = true; $('#rdRefresh').textContent = 'Scanning…'; pollRadar(); };
+  async function pollRadar() { const s = await api('/api/strategy/radar/status'); if (s.running) { $('#rdRefresh').disabled = true; $('#rdRefresh').textContent = 'Scanning…'; return setTimeout(pollRadar, 2500); } $('#rdRefresh').disabled = false; $('#rdRefresh').textContent = 'Refresh radar'; if (s.error) toast('Radar: ' + s.error); const j = await api('/api/strategy/radar'); state.radar = j.radar; renderRadar(); }
+
+  // ---- plan
+  async function loadPlan() {
+    const today = new Date().toISOString().slice(0, 10);
+    const [p, c] = await Promise.all([api(`/api/plan?start=${today}`), api('/api/calendar?days=14')]);
+    $('#plList').innerHTML = (p.items || []).map(it => `<div class="ev"><div style="flex:1"><b>${esc(it.title)}</b><div class="muted small">${esc(it.day)}${it.note ? ' · ' + esc(it.note.slice(0, 80)) : ''}</div></div>${it.status !== 'done' ? `<button class="small" data-done="${it.id}">Done</button>` : '<span class="pill">done</span>'}</div>`).join('') || '<p class="muted small">Nothing planned yet.</p>';
+    $$('#plList [data-done]').forEach(b => b.onclick = async () => { await api(`/api/plan/${b.dataset.done}`, { method: 'POST', body: { status: 'done' } }); loadPlan(); });
+    const days = Object.keys(c.days || {}).sort();
+    $('#plCal').innerHTML = days.map(d => `<div class="day"><div class="d">${d}</div>${c.days[d].map(v => `<div class="ev"><img src="${esc(v.thumb || `https://i.ytimg.com/vi/${v.video_id}/mqdefault.jpg`)}" alt=""><div style="flex:1;min-width:0"><div>${esc(v.title)}</div><div class="muted small">${esc(v.channel)} · ${new Date(v.publish_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</div></div></div>`).join('')}</div>`).join('') || '<p class="muted small">No scheduled uploads in the window.</p>';
+    if (!$('#plDay').value) $('#plDay').value = today;
+  }
+  $('#plAdd').onclick = async () => { const t = $('#plTitle').value.trim(); if (!t) return; const r = await api('/api/plan', { method: 'POST', body: { day: $('#plDay').value, title: t, channel_id: focus() } }); if (r.ok) { $('#plTitle').value = ''; toast('Planned'); loadPlan(); } else toast(r.error || 'failed'); };
+
+  // ---- alerts
+  async function loadAlerts() {
+    const j = await api('/api/alerts');
+    $('#alList').innerHTML = (j.alerts || []).map(a => `<div class="al"><div class="sev" style="color:${a.severity === 'bad' || a.severity === 'error' ? 'var(--bad)' : a.severity === 'good' ? 'var(--good)' : 'var(--gold)'}">${esc(a.kind || a.severity || '')}</div><div class="t">${esc(a.title)}</div><div class="m">${esc(a.message || '')}</div><div class="row" style="margin-top:6px">${a.link ? `<a class="small" href="${esc(a.link)}" target="_blank" rel="noopener">Open</a>` : ''}<button class="small ghost" data-dismiss="${a.id}">Dismiss</button></div></div>`).join('') || '<p class="muted">All clear.</p>';
+    $$('#alList [data-dismiss]').forEach(b => b.onclick = async () => { await api(`/api/alerts/${b.dataset.dismiss}/dismiss`, { method: 'POST' }); loadAlerts(); });
+  }
+
+  // ---- boot
+  async function boot() {
+    const s = await api('/api/status');
+    if (s.authed === false) { $('#login').classList.remove('hidden'); return; }
+    const cj = await api('/api/channels'); state.chans = cj.channels || [];
+    $('#focus').innerHTML = '<option value="">All channels</option>' + state.chans.map(c => `<option value="${c.channel_id}">${esc(c.title || c.channel_id)}</option>`).join('');
+    await loadBrain();
+    let tab = 'Brain'; try { tab = localStorage.getItem('sf_m_tab') || 'Brain'; } catch (e) { /* ignore */ }
+    show(tab);
+  }
+  boot();
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+})();
+</script>
+</body>
+</html>
