@@ -3,7 +3,9 @@ single-operator install can become multi-user later without a migration of
 meaning, only of rows. Refresh tokens are stored as-is for now; encrypting them
 at rest is a listed pre-rollout task (README).
 """
+import hashlib
 import json
+import secrets
 import sqlite3
 import threading
 import time
@@ -11,7 +13,8 @@ from pathlib import Path
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY, email TEXT UNIQUE, name TEXT, created_at REAL);
+  id INTEGER PRIMARY KEY, email TEXT UNIQUE, name TEXT, created_at REAL,
+  avatar TEXT, pw_hash TEXT, pw_salt TEXT, provider TEXT, provider_sub TEXT, last_login REAL);
 CREATE TABLE IF NOT EXISTS channels (
   channel_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL DEFAULT 1,
   title TEXT, handle TEXT, thumb TEXT, uploads_playlist TEXT,
@@ -59,12 +62,47 @@ class Store:
         self.path = str(path)
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._ctx = threading.local()          # per-request current user id (see set_uid/_uid)
         self._db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=NORMAL")
         with self._lock:
             self._db.executescript(SCHEMA)
+        self._migrate()
         self.ensure_owner()
+
+    # ------------------------------------------------- per-request user scope
+    # The Store is one shared, threaded connection, so "who is asking" travels in a
+    # thread-local set once per request (app.before_request). Methods that take a
+    # user_id default it to None and resolve None -> _uid(), so every dashboard read
+    # is scoped to the signed-in user without threading the id through every call.
+    def set_uid(self, uid):
+        self._ctx.uid = int(uid) if uid else 1
+
+    def _uid(self, user_id=None):
+        if user_id is not None:
+            return int(user_id)
+        return int(getattr(self._ctx, "uid", 1) or 1)
+
+    # settings that were global in the single-operator build but are per-user now; migrate the
+    # operator's existing memory to the owner (u1:) namespace so nothing is lost on upgrade.
+    _LEGACY_USER_SETTINGS = ("strategy:chat", "strategy:pitched", "strategy:notes",
+                             "radar:latest", "radar:queries", "ledger")
+
+    def _migrate(self):
+        """Add the multi-user columns to an existing single-operator database, and move the
+        operator's previously-global per-user settings into the u1: namespace."""
+        have = {r["name"] for r in self._all("PRAGMA table_info(users)")}
+        for col, decl in (("avatar", "TEXT"), ("pw_hash", "TEXT"), ("pw_salt", "TEXT"),
+                          ("provider", "TEXT"), ("provider_sub", "TEXT"), ("last_login", "REAL")):
+            if col not in have:
+                self._exec(f"ALTER TABLE users ADD COLUMN {col} {decl}")
+        for key in self._LEGACY_USER_SETTINGS:
+            old = self._one("SELECT value FROM settings WHERE key=?", (key,))
+            new_key = f"u1:{key}"
+            if old and not self._one("SELECT value FROM settings WHERE key=?", (new_key,)):
+                self._exec("INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)", (new_key, old["value"]))
+                self._exec("DELETE FROM settings WHERE key=?", (key,))
 
     # ---------------------------------------------------------------- basics
     def _exec(self, sql, params=()):
@@ -75,6 +113,21 @@ class Store:
         with self._lock:
             cur = self._db.execute(sql, params)
             return [_row(cur, r) for r in cur.fetchall()]
+
+    def _many(self, sql, rows):
+        """executemany inside one transaction (the connection is in autocommit mode)."""
+        rows = list(rows)
+        if not rows:
+            return 0
+        with self._lock:
+            self._db.execute("BEGIN")
+            try:
+                self._db.executemany(sql, rows)
+                self._db.execute("COMMIT")
+            except Exception:
+                self._db.execute("ROLLBACK")
+                raise
+        return len(rows)
 
     def _one(self, sql, params=()):
         with self._lock:
@@ -92,8 +145,78 @@ class Store:
                        (time.time(),))
         return 1
 
+    _USER_PUBLIC = ("id", "email", "name", "avatar", "provider", "created_at", "last_login")
+
+    def _pub_user(self, row):
+        if not row:
+            return None
+        u = {k: row.get(k) for k in self._USER_PUBLIC}
+        u["has_password"] = bool(row.get("pw_hash"))
+        return u
+
+    def owner_unclaimed(self):
+        """True while user id=1 is still the placeholder seeded on a fresh install (no real
+        credentials). The first real signup claims it so the operator keeps their channels."""
+        r = self._one("SELECT * FROM users WHERE id=1")
+        return bool(r) and r.get("email") == "owner" and not r.get("pw_hash") and not r.get("provider_sub")
+
+    def get_user(self, uid):
+        return self._one("SELECT * FROM users WHERE id=?", (uid,))
+
+    def user_by_email(self, email):
+        if not email:
+            return None
+        return self._one("SELECT * FROM users WHERE lower(email)=lower(?)", (email.strip(),))
+
+    def user_by_provider(self, provider, sub):
+        if not (provider and sub):
+            return None
+        return self._one("SELECT * FROM users WHERE provider=? AND provider_sub=?", (provider, str(sub)))
+
+    def public_user(self, uid):
+        return self._pub_user(self.get_user(uid))
+
+    def user_count(self):
+        return (self._one("SELECT COUNT(*) n FROM users") or {}).get("n", 0)
+
+    def create_user(self, fields):
+        """Insert a new user row. `fields` may carry email, name, avatar, pw_hash, pw_salt,
+        provider, provider_sub. Returns the new uid."""
+        now = time.time()
+        cur = self._exec(
+            """INSERT INTO users(email,name,avatar,pw_hash,pw_salt,provider,provider_sub,created_at,last_login)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
+            (fields.get("email"), fields.get("name"), fields.get("avatar"), fields.get("pw_hash"),
+             fields.get("pw_salt"), fields.get("provider"), fields.get("provider_sub"), now, now))
+        return cur.lastrowid
+
+    def claim_owner(self, fields):
+        """Upgrade the placeholder owner (id=1) into a real account, keeping its channels."""
+        self._exec(
+            """UPDATE users SET email=?, name=?, avatar=?, pw_hash=?, pw_salt=?, provider=?,
+                 provider_sub=?, last_login=? WHERE id=1""",
+            (fields.get("email"), fields.get("name") or "Owner", fields.get("avatar"),
+             fields.get("pw_hash"), fields.get("pw_salt"), fields.get("provider"),
+             fields.get("provider_sub"), time.time()))
+        return 1
+
+    def touch_login(self, uid):
+        self._exec("UPDATE users SET last_login=? WHERE id=?", (time.time(), uid))
+
+    def set_user_password(self, uid, pw_hash, pw_salt):
+        self._exec("UPDATE users SET pw_hash=?, pw_salt=? WHERE id=?", (pw_hash, pw_salt, uid))
+
+    def link_provider(self, uid, provider, sub, avatar=None):
+        self._exec("UPDATE users SET provider=?, provider_sub=?, avatar=COALESCE(?,avatar) WHERE id=?",
+                   (provider, str(sub), avatar, uid))
+
+    def list_users(self):
+        rows = self._all("SELECT * FROM users ORDER BY created_at")
+        return [self._pub_user(r) for r in rows]
+
     # -------------------------------------------------------------- channels
-    def upsert_channel(self, ch, user_id=1):
+    def upsert_channel(self, ch, user_id=None):
+        user_id = self._uid(user_id)
         old = self.channel(ch["channel_id"])
         self._exec(
             """INSERT INTO channels(channel_id,user_id,title,handle,thumb,uploads_playlist,refresh_token,
@@ -109,11 +232,19 @@ class Store:
              old["stats_json"] if old else None, None))
         return self.channel(ch["channel_id"])
 
-    def channels(self, user_id=1):
-        rows = self._all("SELECT * FROM channels WHERE user_id=? ORDER BY title COLLATE NOCASE", (user_id,))
+    def channels(self, user_id=None):
+        rows = self._all("SELECT * FROM channels WHERE user_id=? ORDER BY title COLLATE NOCASE", (self._uid(user_id),))
         for r in rows:
             r["stats"] = json.loads(r.pop("stats_json") or "{}")
             r["has_token"] = bool(r.pop("refresh_token"))
+        return rows
+
+    def all_channels(self):
+        """Every channel across all users (background sync runs for everyone, not one uid)."""
+        rows = self._all("SELECT * FROM channels ORDER BY user_id, title COLLATE NOCASE")
+        for r in rows:
+            r["stats"] = json.loads(r.pop("stats_json") or "{}")
+            r["has_token"] = bool(r.get("refresh_token"))
         return rows
 
     def channel(self, channel_id):
@@ -153,13 +284,13 @@ class Store:
                                  f"ON CONFLICT(video_id) DO UPDATE SET {upd}",
                                  tuple(row[c] for c in VIDEO_COLS))
 
-    def videos(self, channel_id=None, limit=None, user_id=1):
+    def videos(self, channel_id=None, limit=None, user_id=None):
         if channel_id:
             sql, params = "SELECT * FROM videos WHERE channel_id=? ORDER BY published_at DESC", (channel_id,)
         else:
             sql = ("SELECT v.* FROM videos v JOIN channels c ON c.channel_id=v.channel_id "
                    "WHERE c.user_id=? ORDER BY v.published_at DESC")
-            params = (user_id,)
+            params = (self._uid(user_id),)
         if limit:
             sql += f" LIMIT {int(limit)}"
         rows = self._all(sql, params)
@@ -196,10 +327,10 @@ class Store:
         return self._all("SELECT * FROM daily WHERE channel_id=? AND day>=? AND day<=? ORDER BY day",
                          (channel_id, start_day, end_day))
 
-    def daily_all(self, start_day, end_day, user_id=1):
+    def daily_all(self, start_day, end_day, user_id=None):
         return self._all(
             "SELECT d.* FROM daily d JOIN channels c ON c.channel_id=d.channel_id "
-            "WHERE c.user_id=? AND d.day>=? AND d.day<=? ORDER BY d.day", (user_id, start_day, end_day))
+            "WHERE c.user_id=? AND d.day>=? AND d.day<=? ORDER BY d.day", (self._uid(user_id), start_day, end_day))
 
     def upsert_video_stats(self, channel_id, window_days, rows):
         now = time.time()
@@ -218,8 +349,9 @@ class Store:
                          (channel_id, window_days))
 
     # ---------------------------------------------------------------- alerts
-    def add_alert(self, a, user_id=1):
+    def add_alert(self, a, user_id=None):
         """Insert unless an alert with the same key exists. Returns True when new."""
+        user_id = self._uid(user_id)
         if self._one("SELECT id FROM alerts WHERE key=?", (a["key"],)):
             return False
         self._exec(
@@ -230,20 +362,26 @@ class Store:
              a.get("created_at", time.time())))
         return True
 
-    def alerts(self, include_dismissed=False, limit=200, user_id=1):
+    def alerts(self, include_dismissed=False, limit=200, user_id=None):
         sql = "SELECT * FROM alerts WHERE user_id=?" + ("" if include_dismissed else " AND dismissed=0")
-        return self._all(sql + f" ORDER BY created_at DESC LIMIT {int(limit)}", (user_id,))
+        return self._all(sql + f" ORDER BY created_at DESC LIMIT {int(limit)}", (self._uid(user_id),))
 
-    def undelivered_alerts(self, user_id=1):
-        return self._all("SELECT * FROM alerts WHERE user_id=? AND delivered=0 ORDER BY created_at", (user_id,))
+    def undelivered_alerts(self, user_id=None):
+        return self._all("SELECT * FROM alerts WHERE user_id=? AND delivered=0 ORDER BY created_at", (self._uid(user_id),))
 
     def mark_delivered(self, ids):
         with self._lock:
             for i in ids:
                 self._db.execute("UPDATE alerts SET delivered=1 WHERE id=?", (i,))
 
-    def dismiss_alert(self, alert_id):
-        self._exec("UPDATE alerts SET dismissed=1 WHERE id=?", (alert_id,))
+    def dismiss_alert(self, alert_id, user_id=None):
+        # scoped to the signed-in account: an alert id from someone else's list does nothing
+        self._exec("UPDATE alerts SET dismissed=1 WHERE id=? AND user_id=?", (alert_id, self._uid(user_id)))
+
+    def dismiss_all_alerts(self, user_id=None):
+        """Dismiss every open alert of this account; returns how many were cleared."""
+        cur = self._exec("UPDATE alerts SET dismissed=1 WHERE user_id=? AND dismissed=0", (self._uid(user_id),))
+        return cur.rowcount if cur is not None else 0
 
     # -------------------------------------------------------------- settings
     def get_setting(self, key, default=None):
@@ -258,6 +396,60 @@ class Store:
     def set_setting(self, key, value):
         self._exec("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                    (key, json.dumps(value)))
+
+    # Per-user settings live in the same table under a "u{uid}:" prefix, so the strategy
+    # chat, pitched-idea memory, radar cache and operator notes are private to each user.
+    def _uk(self, key, user_id=None):
+        return f"u{self._uid(user_id)}:{key}"
+
+    def get_user_setting(self, key, default=None, user_id=None):
+        return self.get_setting(self._uk(key, user_id), default)
+
+    def set_user_setting(self, key, value, user_id=None):
+        self.set_setting(self._uk(key, user_id), value)
+
+    # ------------------------------------------------------ personal extension keys
+    # Each account has its own key for the browser extension (Settings -> Browser extension).
+    # The key itself is kept so the account can see it again; lookups go through a hash index.
+    def ext_token_for(self, uid):
+        tok = self.get_setting(f"u{int(uid)}:ext_token")
+        if not tok:
+            tok = secrets.token_urlsafe(24)
+            self.set_setting(f"u{int(uid)}:ext_token", tok)
+            self.set_setting("exttok:" + hashlib.sha256(tok.encode()).hexdigest(), int(uid))
+        return tok
+
+    def rotate_ext_token(self, uid):
+        old = self.get_setting(f"u{int(uid)}:ext_token")
+        if old:
+            self._exec("DELETE FROM settings WHERE key=?", ("exttok:" + hashlib.sha256(old.encode()).hexdigest(),))
+            self._exec("DELETE FROM settings WHERE key=?", (f"u{int(uid)}:ext_token",))
+        return self.ext_token_for(uid)
+
+    def delete_user(self, uid):
+        """Remove an account and everything that belongs only to it (never the owner, uid 1)."""
+        uid = int(uid)
+        if uid == 1:
+            raise ValueError("the owner account can't be deleted")
+        for ch in self._all("SELECT channel_id FROM channels WHERE user_id=?", (uid,)):
+            self.delete_channel(ch["channel_id"])
+        for t in [r["name"] for r in self._all("SELECT name FROM sqlite_master WHERE type='table'")]:
+            if "user_id" in [c["name"] for c in self._all(f"PRAGMA table_info({t})")]:
+                self._exec(f"DELETE FROM {t} WHERE user_id=?", (uid,))
+        tok = self.get_setting(f"u{uid}:ext_token")
+        if tok:
+            self._exec("DELETE FROM settings WHERE key=?", ("exttok:" + hashlib.sha256(tok.encode()).hexdigest(),))
+        self._exec("DELETE FROM settings WHERE key LIKE ?", (f"u{uid}:%",))
+        self._exec("DELETE FROM users WHERE id=?", (uid,))
+
+    def user_for_ext_token(self, tok):
+        if not tok:
+            return None
+        v = self.get_setting("exttok:" + hashlib.sha256(str(tok).encode()).hexdigest())
+        try:
+            return int(v) if v else None
+        except (TypeError, ValueError):
+            return None
 
     # ----------------------------------------------------------------- quota
     def add_quota(self, day, units):

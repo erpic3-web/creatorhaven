@@ -164,132 +164,452 @@ def estimated_revenue(videos, rpm_long=(2.0, 6.0), rpm_short=(0.20, 0.40), auto_
 # ---------------------------------------------------------------- residual / evergreen views
 # Public data gives a video's CURRENT total views and its age, never its daily history. To
 # estimate how many views a channel got in the last N days (what Studio's "28 days" shows) we
-# model each video's view-decay curve, ANCHOR it to that video's known total at its known age,
-# and read off the window slice — then sum across the catalogue. The outlier score sets how
-# front-loaded the curve is: a banger sustains a ~1-month spike then a slowly-decaying tail; a
-# flop spikes for a day then sits flat/evergreen. Calibrated against two real Studio curves
-# ("Arlo went MISSING" 2.9M / 307d, and a 25k / 115d flop) — see scratchpad/residual_fit*.py.
-# Shape: s(t) = (t+t0)^-p1 for t<=tb, then continues ∝ (t+t0)^-p2 (the evergreen tail).
-_RES_P1 = 1.5                       # head slope (shared across all videos)
-_RES_T0 = 0.5
-_RES_O_LO, _RES_O_HI = 0.35, 19.0  # the two calibration outlier scores (flop / banger)
-_RES_TB = (3.0, 30.0)              # spike duration in days at O_LO / O_HI
-_RES_P2 = (0.3, 1.0)              # evergreen-tail slope at O_LO / O_HI
-# A channel outlier this big means videos reached new audiences, which rediscover the whole back
-# catalogue — the user's rule: add at least +10k views / 48h to residual (older) uploads.
-RES_BOOST_OUTLIER = 8.0
-RES_BOOST_PER_48H = 10000.0
-# The back-catalogue integral uses the RECENT median as a typical un-sampled upload's size, which
-# overstates genuinely OLD uploads (a channel had fewer viewers back then) — and the further back
-# the fetched sample already reaches, the older the un-sampled remainder, so the more it overstates.
-# Damping therefore falls linearly with the oldest sampled age. Calibrated to two real channels'
-# Studio 28-day figures: Erik1515 (slow uploader, oldest ~312d → needs 0.31) and pixiiuwu (fast,
-# oldest ~70d → needs 0.85). Refine as more real Studio numbers arrive.
-RES_BACK_DAMP0 = 1.006
-RES_BACK_DAMP_SLOPE = 0.002236     # per day of oldest-sampled age
+# model each upload's view-decay curve, ANCHOR it to that upload's known total at its known
+# age, read off the window slice — and sum across the WHOLE catalogue (every public upload,
+# not a recent sample: on a ten-year channel the old uploads carried 45% of last year's views).
+#
+# The shape is a daily-rate curve r(t), t = days since publish, tabulated once at import, ONE
+# PER FORMAT (long-form / Shorts): day-0 spike + launch exp + "suggested" plateau with a soft
+# cut-off + evergreen power-law tail. Three observable modifiers scale the mixture weights:
+#   • the upload's OUTLIER score (views / the channel's median for that format) raises the
+#     evergreen weight (YouTube keeps serving its big winners: VMT's 3-year-old Shorts),
+#   • the channel's views-per-subscriber (median views / subs) raises the plateau weight
+#     (discovery-driven channels have long legs, subscriber-driven ones are front-loaded),
+#   • the channel's upload cadence lowers the evergreen weight (frequent uploaders displace
+#     their own back catalogue).
+# CALIBRATED 2026-09-16 on four Studio exports (Erik1515, Kryptic, VMT, pixiiuwu: ~2,000
+# public uploads with last-year truth, 20 daily curves, 16 window totals; tools/
+# window_calibration.py scores any export). Blind whole-catalogue estimates land within
+# ~10% on average; the 28-day window can still miss by 15-40% because a channel's CURRENT
+# state (a slump, a recirculation wave on old Shorts) is not a function of its uploads' ages.
+# That is what the daily snapshots below measure: a window the snapshot history covers is
+# exact, and per-upload snapshots anchor every video to its own measured rate before that.
+SHAPES = {
+    0: {"f0": 0.0550, "wa": 0.1807, "ta": 2.0, "wb": 0.7963, "tb": 30.0, "tcut": 157.4, "s": 5.24,
+        "we": 0.6079, "t0": 84.0, "q": 2.097, "gamma": 0.80},          # long-form
+    1: {"f0": 0.0249, "wa": 0.1080, "ta": 9.09, "wb": 0.0655, "tb": 1980.0, "tcut": 136.7, "s": 5.0,
+        "we": 0.1253, "t0": 735.3, "q": 1.883, "gamma": 0.281},        # Shorts
+}
+ALPHA = 0.80                   # plateau weight ~ exp(ALPHA * (log views-per-sub - LOG_VPS_REF))
+BETA = 0.80                    # evergreen weight ~ (CAD_REF / uploads-per-week) ** BETA
+LOG_VPS_REF = math.log(0.3)
+CAD_REF = 1.5
+OUTLIER_CLIP = (0.05, 300.0)
+CHANNEL_MULT_RANGE = (0.2, 5.0)  # sanity clamp on the two channel-level multipliers
+SHAPE_MAX_DAYS = 7400          # ~20 years; older uploads use the table's end
+LAUNCH_DAYS = 60               # a video's first 60 days = "launch" views, the rest = "tail"
+TAIL_MEMORY_DAYS = 45          # how far back a measured rate keeps correcting the model (a slump now says little about 3 months ago)
+TAIL_K_RANGE = (0.4, 2.5)      # sanity clamp on the channel-level measured/modelled tail ratio
+VIDEO_K_RANGE = (0.1, 8.0)     # per-upload ratio (a dead Short vs a recirculating one)
+MIN_MEASURED_DAYS = 7          # fewer snapshot days than this = too noisy to calibrate on (day-to-day swings of 30%)
 
 
-def _back_damp(oldest_days):
-    return max(0.25, min(1.0, RES_BACK_DAMP0 - RES_BACK_DAMP_SLOPE * (oldest_days or 0.0)))
+def _build_components(p, max_days=SHAPE_MAX_DAYS):
+    """Cumulative arrays (index t+1 = share by the END of day t) for the three weighted parts:
+    core (spike + launch), plateau, evergreen — kept apart so per-upload multipliers can scale them."""
+    launch = [math.exp(-t / p["ta"]) for t in range(max_days + 1)]
+    plat = [math.exp(-t / p["tb"]) / (1 + math.exp(min(60.0, max(-60.0, (t - p["tcut"]) / p["s"])))) for t in range(max_days + 1)]
+    ever = [(1 + t / p["t0"]) ** -p["q"] for t in range(max_days + 1)]
+    ls, ps, es = sum(launch), sum(plat), sum(ever)
+    core, cpl, cev = [0.0], [0.0], [0.0]
+    a = b = c = 0.0
+    for t in range(max_days + 1):
+        a += (p["f0"] if t == 0 else 0.0) + p["wa"] * launch[t] / ls
+        b += p["wb"] * plat[t] / ps
+        c += p["we"] * ever[t] / es
+        core.append(a); cpl.append(b); cev.append(c)
+    return core, cpl, cev
 
 
-def _decay_params(outlier):
-    o = max(0.05, float(outlier or 1.0))
-    x = (math.log10(o) - math.log10(_RES_O_LO)) / (math.log10(_RES_O_HI) - math.log10(_RES_O_LO))
-    tb = min(52.0, max(0.5, _RES_TB[0] + (_RES_TB[1] - _RES_TB[0]) * x))
-    p2 = min(1.6, max(0.0, _RES_P2[0] + (_RES_P2[1] - _RES_P2[0]) * x))
-    return _RES_P1, p2, tb, _RES_T0
+_COMPONENTS = {fmt: _build_components(p) for fmt, p in SHAPES.items()}
+
+# DORMANT CHANNELS: no public upload for DORMANT_AFTER_DAYS. The four calibration channels were all
+# active, and the cadence feature extrapolated "uploads rarely -> old videos stay alive" to its 5x
+# clamp for a channel that stopped. On K9 (1.59M subs, last upload 635 days before its Studio
+# export of 2026-08-31..09-27: 740,815 views) the active shape said 1,077,291 and was wrong in BOTH
+# directions: its old Shorts got 303K (model 928K) and its old long-form 430K (model 149K). Fitted
+# on K9's 251 per-video 28-day views: long-form evergreen fades ~5x slower (t0 84 -> 400 days) and
+# neither format gets the cadence boost; Shorts also lose the outlier boost (its 11M-view Short got
+# 6K). Result on K9: 683K modelled for the 251 public uploads (-8% vs Studio, was +45%).
+# One dormant channel of evidence — per-upload snapshots correct it further after 7 days.
+DORMANT_AFTER_DAYS = 180
+DORMANT = {0: {"t0": 400.0, "me": 1.0, "gamma": 0.80},
+           1: {"me": 0.80, "gamma": 0.0}}
+_COMPONENTS_DORMANT = {0: _build_components({**SHAPES[0], "t0": DORMANT[0]["t0"]}), 1: _COMPONENTS[1]}
 
 
-def _int_pow(a, b, p, t0):
-    """Closed form of the integral of (t+t0)^-p from a to b (handles p==1 and p==0)."""
-    a0, b0 = a + t0, b + t0
-    if abs(p - 1.0) < 1e-9:
-        return math.log(b0 / a0)
-    return (b0 ** (1 - p) - a0 ** (1 - p)) / (1 - p)
-
-
-def _decay_cum(T, p1, p2, tb, t0):
-    """Cumulative area under the two-segment decay shape from 0 to T."""
-    if T <= 0:
+def _interp(arr, t):
+    if t <= 0:
         return 0.0
-    if T <= tb:
-        return _int_pow(0.0, T, p1, t0)
-    head = _int_pow(0.0, tb, p1, t0)
-    c = (tb + t0) ** (p2 - p1)          # continuity multiplier for the tail segment
-    return head + c * _int_pow(tb, T, p2, t0)
+    if t >= SHAPE_MAX_DAYS:
+        return arr[-1]
+    i = int(t)
+    return arr[i] + (arr[i + 1] - arr[i]) * (t - i)
 
 
-def video_window_views(total_views, age_days, window_days, outlier=1.0):
+def shape_cum(t, is_short=0, mp=1.0, me=1.0, dormant=False):
+    """Share (0..1) of an upload's eventual views that have arrived t days after publish, for
+    a format with plateau multiplier mp and evergreen multiplier me (dormant = the channel
+    stopped uploading: the slower-fading long-form tail)."""
+    core, cpl, cev = (_COMPONENTS_DORMANT if dormant else _COMPONENTS)[1 if is_short else 0]
+    tot = core[-1] + mp * cpl[-1] + me * cev[-1]
+    if t <= 0 or tot <= 0:
+        return 0.0
+    return (_interp(core, t) + mp * _interp(cpl, t) + me * _interp(cev, t)) / tot
+
+
+def catalog_context(videos, channel=None, now=None):
+    """Channel-level inputs of the shape, from the catalogue itself: per-format median views
+    (for outlier scores), the plateau multiplier per format (views per subscriber) and the
+    evergreen multiplier (upload cadence over the last 91 days)."""
+    now = now or datetime.now(timezone.utc)
+    pub = [v for v in videos if v.get("privacy", "public") in (None, "public") and (v.get("views") or 0) > 0]
+    allv = [v.get("views") or 0 for v in pub]
+    med = {}
+    for fmt in (0, 1):
+        same = [v.get("views") or 0 for v in pub if int(v.get("is_short") or 0) == fmt]
+        med[fmt] = median(same) if len(same) >= 3 else (median(allv) if allv else 1.0)
+        med[fmt] = med[fmt] or 1.0
+    subs = (channel or {}).get("subscribers") or 0
+    mp = {}
+    for fmt in (0, 1):
+        if subs > 0:
+            m = math.exp(ALPHA * (math.log(max(1e-6, med[fmt] / subs)) - LOG_VPS_REF))
+            mp[fmt] = max(CHANNEL_MULT_RANGE[0], min(CHANNEL_MULT_RANGE[1], m))
+        else:
+            mp[fmt] = 1.0
+    ages = [a for a in (days_since(v.get("published_at"), now) for v in pub) if a is not None]
+    recent = sum(1 for a in ages if a <= 91)
+    cadence = max(0.1, recent / 13.0)
+    me_ch = max(CHANNEL_MULT_RANGE[0], min(CHANNEL_MULT_RANGE[1], (CAD_REF / cadence) ** BETA))
+    last = min(ages) if ages else None
+    return {"median": med, "mp": mp, "me_ch": me_ch, "cadence": round(cadence, 2), "subs": subs,
+            "days_since_upload": round(last, 1) if last is not None else None,
+            "dormant": bool(last is not None and last >= DORMANT_AFTER_DAYS)}
+
+
+def _video_mults(views, is_short, ctx):
+    fmt = 1 if is_short else 0
+    if not ctx:
+        return 1.0, 1.0
+    o = (views or 0) / (ctx["median"].get(fmt) or 1.0)
+    o = max(OUTLIER_CLIP[0], min(OUTLIER_CLIP[1], o))
+    if ctx.get("dormant"):
+        d = DORMANT[fmt]
+        return ctx["mp"].get(fmt, 1.0), d["me"] * o ** d["gamma"]
+    return ctx["mp"].get(fmt, 1.0), ctx["me_ch"] * o ** SHAPES[fmt]["gamma"]
+
+
+def video_window_views(total_views, age_days, window_days, outlier=1.0, is_short=0, ctx=None):
     """Estimated views a single video accumulated in its last `window_days`, from its current
-    total and age. A video younger than the window returns its whole total (all views are recent)."""
+    total and age. A video younger than the window returns its whole total (all views are recent).
+    `outlier` is only used when no catalogue context is given."""
     total_views = total_views or 0
     if total_views <= 0 or age_days is None or age_days <= 0 or not window_days:
         return 0.0
     if age_days <= window_days:
         return float(total_views)
-    p1, p2, tb, t0 = _decay_params(outlier)
-    st = _decay_cum(age_days, p1, p2, tb, t0)
-    if st <= 0:
+    if ctx:
+        mp, me = _video_mults(total_views, is_short, ctx)
+    else:
+        o = max(OUTLIER_CLIP[0], min(OUTLIER_CLIP[1], float(outlier or 1.0)))
+        mp, me = 1.0, o ** SHAPES[1 if is_short else 0]["gamma"]
+    dm = bool(ctx and ctx.get("dormant"))
+    ca = shape_cum(age_days, is_short, mp, me, dm)
+    if ca <= 0:
         return 0.0
-    sw = _decay_cum(age_days - window_days, p1, p2, tb, t0)
-    return float(total_views) * (st - sw) / st
+    return float(total_views) * (ca - shape_cum(age_days - window_days, is_short, mp, me, dm)) / ca
+
+
+def video_daily_slices(total_views, age_days, days, outlier=1.0, is_short=0, ctx=None):
+    """Per day-ago slices (index 0 = the most recent day) of a video's modelled views, split
+    into (launch, tail) = inside / after its first LAUNCH_DAYS days. Length `days`."""
+    launch, tail = [0.0] * days, [0.0] * days
+    if not total_views or not age_days or age_days <= 0:
+        return launch, tail
+    if ctx:
+        mp, me = _video_mults(total_views, is_short, ctx)
+    else:
+        o = max(OUTLIER_CLIP[0], min(OUTLIER_CLIP[1], float(outlier or 1.0)))
+        mp, me = 1.0, o ** SHAPES[1 if is_short else 0]["gamma"]
+    dm = bool(ctx and ctx.get("dormant"))
+    ca = shape_cum(age_days, is_short, mp, me, dm)
+    if ca <= 0:
+        return launch, tail
+    scale = float(total_views) / ca
+    c_m = shape_cum(LAUNCH_DAYS, is_short, mp, me, dm)
+    for d in range(days):
+        hi = age_days - d
+        if hi <= 0:
+            break
+        lo = max(0.0, hi - 1.0)
+        c_lo, c_hi = shape_cum(lo, is_short, mp, me, dm), shape_cum(hi, is_short, mp, me, dm)
+        if hi <= LAUNCH_DAYS:
+            launch[d] = (c_hi - c_lo) * scale
+        elif lo >= LAUNCH_DAYS:
+            tail[d] = (c_hi - c_lo) * scale
+        else:
+            launch[d] = (c_m - c_lo) * scale
+            tail[d] = (c_hi - c_m) * scale
+    return launch, tail
+
+
+def channel_daily_profile(videos, days, now=None, ctx=None):
+    """Channel-wide modelled views per day-ago over the last `days`: (launch[], tail[]) summed
+    over every public upload with views (plus the count of uploads used and their view sum)."""
+    now = now or datetime.now(timezone.utc)
+    ctx = ctx or catalog_context(videos, None, now)
+    launch, tail = [0.0] * days, [0.0] * days
+    n = 0
+    sample_views = 0
+    for v in videos:
+        if v.get("privacy", "public") not in (None, "public") or not (v.get("views") or 0):
+            continue
+        age = days_since(v.get("published_at"), now)
+        if not age:
+            continue
+        n += 1
+        sample_views += v.get("views") or 0
+        l, t = video_daily_slices(v.get("views") or 0, age, days, is_short=int(v.get("is_short") or 0), ctx=ctx)
+        for d in range(days):
+            launch[d] += l[d]
+            tail[d] += t[d]
+    return launch, tail, n, sample_views
+
+
+def back_catalog_views(videos, days, total_videos, lifetime_views, channel_age_days, now=None, ctx=None):
+    """Window views of the uploads OLDER than the fetched catalogue (only when the channel has
+    more uploads than we fetched): a typical old upload = the median of the oldest quarter we
+    did fetch, at ages spread between the oldest fetched upload and the channel's birth."""
+    now = now or datetime.now(timezone.utc)
+    pub = [v for v in videos if v.get("privacy", "public") in (None, "public") and (v.get("views") or 0) > 0]
+    if not total_videos or total_videos <= len(pub) or not pub or not days:
+        return 0.0
+    ages = sorted(((days_since(v.get("published_at"), now) or 0, v.get("views") or 0) for v in pub), reverse=True)
+    oldest = ages[0][0] if ages else float(days)
+    old_quarter = [vw for _, vw in ages[:max(3, len(ages) // 4)]]
+    typical = median(old_quarter) if old_quarter else 0
+    n_missing = total_videos - len(pub)
+    far = channel_age_days if (channel_age_days and channel_age_days > oldest + 1) else oldest * 3.0
+    far = max(far, oldest + 1.0)
+    K = 12
+    mean_frac = sum(video_window_views(typical, oldest + (far - oldest) * i / (K - 1), days, ctx=ctx) / typical
+                    for i in range(K)) / K if typical else 0.0
+    back = typical * n_missing * mean_frac
+    if lifetime_views:
+        sample_views = sum(v.get("views") or 0 for v in pub)
+        back = min(back, max(0.0, float(lifetime_views) - sample_views))
+    return back
+
+
+def _fade(d, span):
+    return math.exp(-(d - span) / TAIL_MEMORY_DAYS)
+
+
+def channel_view_windows(videos, windows, now=None, measured=None, total_videos=None,
+                         lifetime_views=None, channel_age_days=None, channel=None):
+    """Channel-wide views over several windows from one modelled daily profile, anchored to
+    the daily snapshots when we hold any.
+
+    `measured` = {"days": span, "views": delta, "per_window": {days: views},
+                  "videos": {video_id: {"days": s, "views": d}}}:
+    the change in the channel's total view count over the newest `span` snapshot days, exact
+    deltas for windows the history already covers, and each upload's own delta.
+    Per window W (days):
+      • covered by snapshots      -> that exact delta ("measured")
+      • uploads measured          -> each upload's measured views + its modelled older part scaled
+                                     by its own measured/modelled ratio, fading over
+                                     TAIL_MEMORY_DAYS; uploads without a measurement use the
+                                     channel-level ratio ("blend")
+      • channel total measured    -> measured span + modelled older part, TAIL scaled by the
+                                     channel-level ratio ("blend")
+      • otherwise                 -> the pure model ("model")
+    Returns {label: {...parts}} keyed like `windows` = [(label, days), ...]."""
+    now = now or datetime.now(timezone.utc)
+    horizon = max(d for _, d in windows) if windows else 0
+    ctx = catalog_context(videos, channel, now)
+    pub = [v for v in videos if v.get("privacy", "public") in (None, "public") and (v.get("views") or 0) > 0]
+    span = int((measured or {}).get("days") or 0)
+    mviews = (measured or {}).get("views")
+    per_window = (measured or {}).get("per_window") or {}
+    mvideos = (measured or {}).get("videos") or {}
+    # per-upload slices once, over the horizon
+    items = []
+    launch, tail = [0.0] * horizon, [0.0] * horizon
+    sample_views = 0
+    for v in pub:
+        age = days_since(v.get("published_at"), now)
+        if not age:
+            continue
+        l, t = video_daily_slices(v.get("views") or 0, age, horizon, is_short=int(v.get("is_short") or 0), ctx=ctx)
+        for d in range(horizon):
+            launch[d] += l[d]
+            tail[d] += t[d]
+        sample_views += v.get("views") or 0
+        m = mvideos.get(v.get("video_id")) or {}
+        ms = int(m.get("days") or 0)
+        mv = m.get("views")
+        items.append((age, v.get("views") or 0, l, t, ms if (mv is not None and ms >= MIN_MEASURED_DAYS and ms <= horizon) else 0, mv))
+    n = len(items)
+    k = None
+    if span >= MIN_MEASURED_DAYS and mviews is not None and span <= horizon:
+        ml, mt = sum(launch[:span]), sum(tail[:span])
+        # the channel-level ratio is only trustworthy when launches are a minority of the span:
+        # a burst week says nothing about the tail (per-upload measurements handle that case)
+        if mt > 0 and ml < 0.5 * float(mviews):
+            k = max(TAIL_K_RANGE[0], min(TAIL_K_RANGE[1], (float(mviews) - ml) / mt))
+    out = {}
+    for label, days in windows:
+        back = back_catalog_views(videos, days, total_videos, lifetime_views, channel_age_days, now, ctx)
+        model = sum(launch[:days]) + sum(tail[:days])
+        part = {"days": days, "sample": n, "back_catalog": round(back), "model": round(model + back),
+                "measured_days": span or 0, "tail_k": round(k, 2) if k is not None else None, "videos_measured": 0}
+        if days in per_window and per_window[days] is not None:
+            part.update({"views": round(per_window[days]), "method": "measured", "measured_days": days})
+        else:
+            total = 0.0
+            measured_sum = 0.0
+            n_meas = 0
+            for age, views, l, t, ms, mv in items:
+                if age <= days:
+                    total += views                      # published inside the window: exact
+                    if ms:
+                        measured_sum += float(mv)
+                    continue
+                if ms and ms < days:
+                    # this upload's own recent rate vs the model over the same days
+                    model_span = sum(l[:ms]) + sum(t[:ms])
+                    kv = (float(mv) / model_span) if model_span > 0 else 1.0
+                    kv = max(VIDEO_K_RANGE[0], min(VIDEO_K_RANGE[1], kv))
+                    older = 0.0
+                    for d in range(ms, days):
+                        older += (l[d] + t[d]) * (1 + (kv - 1) * _fade(d, ms))
+                    total += float(mv) + older
+                    measured_sum += float(mv)
+                    n_meas += 1
+                elif k is not None and span < days:
+                    # channel-level: the measured delta enters only through the tail ratio (the
+                    # raw delta is lumpy and mixes in launches that are already counted exactly)
+                    older = 0.0
+                    for d in range(span, days):
+                        older += l[d] + t[d] * (1 + (k - 1) * _fade(d, span))
+                    total += sum(l[:span]) + sum(t[:span]) * k + older
+                else:
+                    total += sum(l[:days]) + sum(t[:days])
+            back_part = back * (1 + ((k if k is not None else 1.0) - 1) * 0.5)
+            method = "blend" if (n_meas or (k is not None and span < days)) else "model"
+            part.update({"views": round(total + back_part), "method": method, "videos_measured": n_meas})
+        part["from_uploads"] = part["views"] - part["back_catalog"]
+        part["context"] = {"cadence": ctx["cadence"], "plateau_x": {"long": round(ctx["mp"][0], 2), "short": round(ctx["mp"][1], 2)},
+                           "evergreen_x": None if ctx.get("dormant") else round(ctx["me_ch"], 2),
+                           "dormant": bool(ctx.get("dormant")), "days_since_upload": ctx.get("days_since_upload")}
+        out[label] = part
+    return out
 
 
 def channel_window_views(videos, days, now=None, outlier_by_id=None, total_videos=None,
-                         lifetime_views=None, channel_age_days=None):
-    """Estimate a channel's total views in the last `days`.
+                         lifetime_views=None, channel_age_days=None, measured=None, channel=None):
+    """Estimate a channel's total views in the last `days` (single-window wrapper around
+    channel_view_windows; `outlier_by_id` is accepted for compatibility)."""
+    if not days:
+        return {"views": 0, "from_uploads": 0, "back_catalog": 0, "boost": 0, "max_outlier": None, "sample": 0, "method": "model"}
+    w = channel_view_windows(videos, [("w", days)], now=now, measured=measured, total_videos=total_videos,
+                             lifetime_views=lifetime_views, channel_age_days=channel_age_days, channel=channel)["w"]
+    w["boost"] = 0
+    w["max_outlier"] = None
+    return w
 
-    Core = the sum of each fetched public video's modelled window slice — anchored to that
-    video's real current total, so a recent breakout's own pull AND the rediscovery bump it
-    gives the rest of the catalogue are already reflected in the current view counts. When we
-    have the channel's real upload count and lifetime total, a small deep-evergreen term is
-    added for the OLDER uploads beyond the fetched sample (scaled by the lifetime views the
-    sample doesn't represent, at the un-sampled catalogue's mid-age). Returns the parts.
-    outlier_by_id: {video_id: score}; computed from the sample median if absent."""
-    now = now or datetime.now(timezone.utc)
-    pub = [v for v in videos if v.get("privacy") == "public" and (v.get("views") or 0) > 0]
-    if not pub or not days:
-        return {"views": 0, "from_uploads": 0, "back_catalog": 0, "boost": 0, "max_outlier": None, "sample": len(pub)}
-    long_views_all = [v.get("views") or 0 for v in pub if not int(v.get("is_short") or 0)]
-    all_views = [v.get("views") or 0 for v in pub]
-    med = median(long_views_all) if long_views_all else (median(all_views) or 1)
-    med_all = median(all_views) if all_views else med    # typical upload size, robust to viral skew
-    if outlier_by_id is None:
-        outlier_by_id = {v["video_id"]: ((v.get("views") or 0) / med if med else 1.0) for v in pub}
-    total = omax = sample_views = 0.0
-    ages = []
-    for v in pub:
-        age = days_since(v.get("published_at"), now)
-        if age:
-            ages.append(age)
-        sample_views += v.get("views") or 0
-        o = outlier_by_id.get(v["video_id"]) or 1.0
-        omax = max(omax, o)
-        total += video_window_views(v.get("views") or 0, age, days, o)
-    # Back catalogue: uploads older than the fetched sample. Their combined views are (lifetime
-    # total − what the sample already accounts for); they sit deep in the evergreen tail, so a
-    # small fraction of those views lands in the window. Only meaningful when the sample doesn't
-    # already cover the whole catalogue.
-    back = 0.0
-    if total_videos and total_videos > len(pub) and med_all > 0:
-        n_missing = total_videos - len(pub)
-        oldest = max(ages) if ages else float(days)
-        far = channel_age_days if (channel_age_days and channel_age_days > oldest + 1) else oldest * 5.0
-        far = max(far, oldest + 1.0)
-        # A typical un-sampled upload (~ the channel's median views, robust to a few virals), averaged
-        # over the age span it could sit in [oldest sampled .. channel age]. Integrating the window
-        # fraction over that span makes the estimate rise correctly with the window size instead of
-        # collapsing to a flat cap — vital for fast-uploading channels whose sample spans only weeks.
-        K = 12
-        mean_frac = sum(video_window_views(1.0, oldest + (far - oldest) * i / (K - 1), days, 1.0)
-                        for i in range(K)) / K
-        back = med_all * n_missing * mean_frac * _back_damp(oldest)
-        if lifetime_views:                              # can't have gained more than the views that exist
-            back = min(back, max(0.0, float(lifetime_views) - sample_views))
-        total += back
-    return {"views": round(total), "from_uploads": round(total - back), "back_catalog": round(back),
-            "boost": 0, "max_outlier": round(omax, 2), "sample": len(pub)}
+
+def _interp_day(pts, target):
+    """Linear interpolation of a (day, value) series at `target` (a datetime)."""
+    before = max((p for p in pts if p[0] <= target), key=lambda p: p[0])
+    after = min((p for p in pts if p[0] >= target), key=lambda p: p[0])
+    if after[0] == before[0]:
+        return before[1]
+    frac = (target - before[0]).days / (after[0] - before[0]).days
+    return before[1] + (after[1] - before[1]) * frac
+
+
+def measured_from_snapshots(rows, windows):
+    """Turn daily channel-total snapshots [{day, views}...] (oldest first) into the `measured`
+    argument of channel_view_windows: the delta over the whole span we hold, plus exact deltas
+    (linearly interpolated between the two neighbouring snapshot days) for each window the
+    history already covers. None when fewer than two days exist."""
+    pts = []
+    for r in rows or []:
+        if r.get("views") is None or not r.get("day"):
+            continue
+        try:
+            pts.append((datetime.strptime(r["day"], "%Y-%m-%d"), int(r["views"])))
+        except Exception:
+            continue
+    pts.sort()
+    if len(pts) < 2:
+        return None
+    latest_day, latest_views = pts[-1]
+    span = (latest_day - pts[0][0]).days
+    if span <= 0:
+        return None
+    per_window = {}
+    for _, days in windows:
+        target = latest_day - timedelta(days=days)
+        if target < pts[0][0]:
+            continue
+        per_window[days] = max(0.0, latest_views - _interp_day(pts, target))
+    raw = max(0, latest_views - pts[0][1])
+    # The Data API's channel total updates in lumps (a 300K jump on one day, a crawl the next),
+    # so the RATE used to calibrate the model's tail is trimmed: with 3+ intervals, an interval
+    # whose per-day rate is over 3x the median of the others is dropped and the span re-scaled.
+    views, trimmed = raw, False
+    ivs = [((pts[i][0] - pts[i - 1][0]).days, pts[i][1] - pts[i - 1][1]) for i in range(1, len(pts))]
+    ivs = [(d, v) for d, v in ivs if d > 0]
+    if len(ivs) >= 3:
+        rates = [v / d for d, v in ivs]
+        hi = max(range(len(ivs)), key=lambda i: rates[i])
+        others = [rates[i] for i in range(len(ivs)) if i != hi]
+        med = sorted(others)[len(others) // 2]
+        if med >= 0 and rates[hi] > 3 * max(med, 1e-9):
+            rest_days = sum(d for i, (d, v) in enumerate(ivs) if i != hi)
+            rest_views = sum(v for i, (d, v) in enumerate(ivs) if i != hi)
+            if rest_days > 0:
+                views, trimmed = max(0.0, rest_views / rest_days * span), True
+    return {"days": span, "views": views, "raw_views": raw, "trimmed": trimmed,
+            "since": pts[0][0].strftime("%Y-%m-%d"), "per_window": per_window}
+
+
+def measured_videos_from_snapshots(rows, latest_day=None, max_days=120):
+    """Per-upload deltas from daily per-video snapshots [{video_id, day, views}...]: for every
+    upload seen on the latest day, its view change since its oldest snapshot within `max_days`.
+    Returns {video_id: {"days": span, "views": delta, "since": day}} (uploads with one day only
+    are left out)."""
+    by = {}
+    for r in rows or []:
+        if r.get("views") is None or not r.get("day") or not r.get("video_id"):
+            continue
+        try:
+            by.setdefault(r["video_id"], []).append((datetime.strptime(r["day"], "%Y-%m-%d"), int(r["views"])))
+        except Exception:
+            continue
+    if not by:
+        return {}
+    if latest_day is None:
+        latest = max(p[0] for pts in by.values() for p in pts)
+    else:
+        latest = datetime.strptime(latest_day, "%Y-%m-%d")
+    out = {}
+    for vid, pts in by.items():
+        pts.sort()
+        if pts[-1][0] != latest:
+            continue
+        old = [p for p in pts if (latest - p[0]).days <= max_days]
+        if len(old) < 2:
+            continue
+        first = old[0]
+        span = (latest - first[0]).days
+        if span <= 0:
+            continue
+        out[vid] = {"days": span, "views": max(0, pts[-1][1] - first[1]), "since": first[0].strftime("%Y-%m-%d")}
+    return out
 
 
 # Assumed average retention for the public watch-hours estimate. Public data gives

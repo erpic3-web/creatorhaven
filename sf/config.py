@@ -38,6 +38,21 @@ DEFAULTS = {
         "client_type": "desktop",     # desktop (any loopback port) | web (registered redirect)
     },
     "discord_webhook_url": "",
+    # --- multi-user sign-in ---------------------------------------------------
+    "require_login": True,            # gate the whole app behind an account (accounts, not a password)
+    "owner_email": "",               # if set, the account with this email claims the operator's channels
+    "admin_emails": [],              # owner-managed whitelist: these accounts get the admin (special) settings + AI
+    "ai_whitelist_only": True,       # gate the paid AI features (Gemini) behind owner + whitelist
+    "thumbs_daily_free": 5,          # thumbnails any other signed-in account may generate per day (0 = whitelist only)
+    "ext_daily_units": 400,          # YouTube quota units a non-owner account's extension may spend per day
+    "google_signin": {               # "log in with Google" (web OAuth app on this host)
+        "client_id": "",
+        "client_secret": "",
+    },
+    "discord_oauth": {               # "log in with Discord"
+        "client_id": "",
+        "client_secret": "",
+    },
     "scan_per_channel": 200,          # newest uploads scanned per sync
     "analytics_days": 90,
     "sync_minutes": 30,               # background refresh cadence (0 = manual only)
@@ -58,6 +73,12 @@ _ENV = {
     "GOOGLE_CLIENT_SECRET": ("google", "client_secret"),
     "GOOGLE_CLIENT_TYPE": ("google", "client_type"),
     "DISCORD_WEBHOOK_URL": ("discord_webhook_url",),
+    "REQUIRE_LOGIN": ("require_login",),
+    "OWNER_EMAIL": ("owner_email",),
+    "GOOGLE_SIGNIN_CLIENT_ID": ("google_signin", "client_id"),
+    "GOOGLE_SIGNIN_CLIENT_SECRET": ("google_signin", "client_secret"),
+    "DISCORD_CLIENT_ID": ("discord_oauth", "client_id"),
+    "DISCORD_CLIENT_SECRET": ("discord_oauth", "client_secret"),
     "EXT_TOKEN": ("ext_token",),
 }
 
@@ -95,8 +116,14 @@ def load(path=None):
             cfg[k] = v
     for env, keys in _ENV.items():
         val = os.environ.get(env)
-        if val:
-            _set(cfg, keys, int(val) if keys == ("port",) and val.isdigit() else val)
+        if val is None or val == "":
+            continue
+        if keys in (("require_login",),):
+            _set(cfg, keys, val.strip().lower() not in ("0", "false", "no", "off"))
+        elif keys == ("port",) and val.isdigit():
+            _set(cfg, keys, int(val))
+        else:
+            _set(cfg, keys, val)
 
     changed = False
     if not cfg["secret_key"]:
@@ -149,7 +176,12 @@ def public_view(cfg):
         "version": APP_VERSION,
         "port": cfg["port"],
         "base_url": cfg["base_url"],
-        "login_required": bool(cfg["site_password"]),
+        "login_required": bool(cfg.get("require_login")),
+        "auth": {
+            "password": True,
+            "google": bool(cfg["google_signin"]["client_id"] and cfg["google_signin"]["client_secret"]),
+            "discord": bool(cfg["discord_oauth"]["client_id"] and cfg["discord_oauth"]["client_secret"]),
+        },
         "gemini": bool(cfg["gemini_api_key"]),
         "youtube_api_key": bool(cfg["youtube_api_key"]),
         "google_client": bool(cfg["google"]["client_id"] and cfg["google"]["client_secret"]),

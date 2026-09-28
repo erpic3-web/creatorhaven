@@ -237,7 +237,7 @@ def _network_block(store, focus_id=None, per_channel=3, max_channels=30):
 
 # ------------------------------------------------------------------------------ memory
 def pitched(store):
-    p = store.get_setting(PITCHED_KEY)
+    p = store.get_user_setting(PITCHED_KEY)
     return p if isinstance(p, list) else []
 
 
@@ -259,7 +259,7 @@ def remember_pitched(store, titles, channel_id=None, refs=None):
         for r in refs:
             if isinstance(r, str) and r:
                 p.append({"title": "", "channel_id": channel_id, "ts": time.time(), "ref_id": r})
-    store.set_setting(PITCHED_KEY, p[-MAX_PITCHED:])
+    store.set_user_setting(PITCHED_KEY, p[-MAX_PITCHED:])
 
 
 def used_refs(store, limit=40):
@@ -276,27 +276,27 @@ def used_refs(store, limit=40):
 
 
 def forget(store):
-    store.set_setting(PITCHED_KEY, [])
-    store.set_setting(CHAT_KEY, [])
+    store.set_user_setting(PITCHED_KEY, [])
+    store.set_user_setting(CHAT_KEY, [])
 
 
 def history(store):
-    h = store.get_setting(CHAT_KEY)
+    h = store.get_user_setting(CHAT_KEY)
     return h if isinstance(h, list) else []
 
 
 def _remember_turn(store, role, text):
     h = history(store)
     h.append({"role": role, "text": text, "ts": time.time()})
-    store.set_setting(CHAT_KEY, h[-MAX_CHAT:])
+    store.set_user_setting(CHAT_KEY, h[-MAX_CHAT:])
 
 
 def notes(store):
-    return store.get_setting(NOTES_KEY) or ""
+    return store.get_user_setting(NOTES_KEY) or ""
 
 
 def set_notes(store, text):
-    store.set_setting(NOTES_KEY, (text or "")[:4000])
+    store.set_user_setting(NOTES_KEY, (text or "")[:4000])
 
 
 def _strip_pitched(reply):

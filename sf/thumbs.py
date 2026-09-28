@@ -3,7 +3,10 @@ selection. The creator's face, a character/avatar, a brand logo and style refere
 are saved to disk and attached to each generation so the subject stays consistent
 across thumbnails — the thumbforge / dti-thumbs approach, generalized to any niche.
 """
+import io
 import json
+import shutil
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -11,9 +14,37 @@ from pathlib import Path
 from . import config, http, imagegen
 
 REF_KINDS = ("face", "character", "brand", "style")
-REFS_DIR = config.DATA / "thumbs" / "refs"
-OUT_DIR = config.DATA / "thumbs" / "outputs"
-_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg", "image/webp": "webp"}
+MAX_REF_BYTES = 8 * 1024 * 1024      # an upload bigger than this is refused
+MAX_REFS_PER_KIND = 12               # per account and kind: keeps a public site's disk in check
+MAX_REF_SIDE = 2048                  # references are downscaled to this; the image model needs no more
+
+
+class RefError(ValueError):
+    """A reference upload the site refuses (not an image, too big, too many)."""
+# Thumbnails, references and generated outputs are private to each user: everything lives
+# under data/thumbs/u<uid>/. The current user id travels in a thread-local set per request
+# (app.before_request -> thumbs.set_uid), mirroring the store.
+_ctx = threading.local()
+
+
+def set_uid(uid):
+    _ctx.uid = int(uid) if uid else 1
+
+
+def _uid():
+    return int(getattr(_ctx, "uid", 1) or 1)
+
+
+def _base():
+    return config.DATA / "thumbs" / f"u{_uid()}"
+
+
+def refs_root():
+    return _base() / "refs"
+
+
+def out_dir():
+    return _base() / "outputs"
 
 # General-purpose style presets (any niche). Each carries a prompt fragment.
 STYLES = {
@@ -49,16 +80,74 @@ COMPOSITION = ("Composition & color rules: 16:9, must read in under a second at 
 def _kind_dir(kind):
     if kind not in REF_KINDS:
         raise ValueError(f"unknown reference kind: {kind}")
-    d = REFS_DIR / kind
+    d = refs_root() / kind
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def save_ref(kind, data, mime):
-    ext = _EXT.get((mime or "").lower(), "png")
+def _clean_image(data):
+    """Decode an upload as a real image and re-encode it. That proves it IS an image, drops the
+    EXIF/GPS data a stranger's phone photo carries, keeps phone photos upright, and caps the
+    size. Returns (bytes, ext)."""
+    try:
+        from PIL import Image, ImageOps
+    except Exception:  # Pillow missing: accept only the magic bytes of the formats we serve
+        sig = data[:12]
+        if sig.startswith(b"\x89PNG"):
+            return data, "png"
+        if sig.startswith(b"\xff\xd8\xff"):
+            return data, "jpg"
+        if sig[:4] == b"RIFF" and sig[8:12] == b"WEBP":
+            return data, "webp"
+        raise RefError("That file is not a PNG, JPEG or WebP image.")
+    try:
+        im = Image.open(io.BytesIO(data))
+        im.load()
+        im = ImageOps.exif_transpose(im)
+    except Exception:
+        raise RefError("That file is not an image the generator can use.")
+    if max(im.size) > MAX_REF_SIDE:
+        im.thumbnail((MAX_REF_SIDE, MAX_REF_SIDE))
+    alpha = im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info)
+    out = io.BytesIO()
+    if alpha:
+        im.convert("RGBA").save(out, "PNG", optimize=True)
+        return out.getvalue(), "png"
+    im.convert("RGB").save(out, "JPEG", quality=92)
+    return out.getvalue(), "jpg"
+
+
+def save_ref(kind, data, mime=None):
+    """Store one reference image for the signed-in account (private to it)."""
+    if not data:
+        raise RefError("No image received.")
+    if len(data) > MAX_REF_BYTES:
+        raise RefError(f"That image is over {MAX_REF_BYTES // (1024 * 1024)} MB. Pick a smaller one.")
+    d = _kind_dir(kind)
+    if sum(1 for _ in d.glob("*.*")) >= MAX_REFS_PER_KIND:
+        raise RefError(f"You already have {MAX_REFS_PER_KIND} {kind} references. Delete one first.")
+    clean, ext = _clean_image(data)
     rid = uuid.uuid4().hex[:16]
-    (_kind_dir(kind) / f"{rid}.{ext}").write_bytes(data)
+    (d / f"{rid}.{ext}").write_bytes(clean)
     return {"id": rid, "kind": kind, "url": f"/thumbs/ref/{kind}/{rid}.{ext}", "ext": ext}
+
+
+def prepare_new_user(uid):
+    """A brand-new account starts with an empty thumbnail folder. Account ids are plain integers,
+    so a folder left behind by an earlier account (or an old test run) with the same id would
+    otherwise hand its face/character images to a stranger. The leftover is moved aside."""
+    root = config.DATA / "thumbs"
+    old = root / f"u{int(uid)}"
+    if not old.exists():
+        return None
+    dest = root / "_retired" / f"u{int(uid)}-{int(time.time())}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        old.rename(dest)
+    except Exception:
+        shutil.copytree(old, dest, dirs_exist_ok=True)
+        shutil.rmtree(old)
+    return dest
 
 
 def _find(kind, rid):
@@ -93,8 +182,8 @@ def list_refs():
 
 
 def list_outputs(limit=40):
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    ps = sorted(OUT_DIR.glob("*.png"), key=lambda x: x.stat().st_mtime, reverse=True)[:limit]
+    od = out_dir(); od.mkdir(parents=True, exist_ok=True)
+    ps = sorted(od.glob("*.png"), key=lambda x: x.stat().st_mtime, reverse=True)[:limit]
     return [{"id": p.stem, "url": f"/thumbs/out/{p.name}"} for p in ps]
 
 
@@ -149,19 +238,53 @@ def import_from_channel(store, channel_id, limit_thumbs=5):
         stats = json.loads(ch.get("stats_json") or "{}")
     except Exception:
         pass
-    added = {"character": 0, "style": 0}
-    av = _download(ch.get("thumb"))
-    if av:
-        save_ref("character", av, "image/jpeg"); added["character"] += 1
-    banner = _download(stats.get("banner"))
-    if banner:
-        save_ref("style", banner, "image/jpeg"); added["style"] += 1
     vids = [v for v in store.videos(channel_id) if v.get("privacy") == "public" and (v.get("thumb") or v.get("video_id"))]
-    vids.sort(key=lambda v: v.get("views") or 0, reverse=True)
+    added = _import_look(ch.get("thumb"), stats.get("banner"), vids, limit_thumbs)
+    return {"added": added, "channel": ch.get("title"), "refs": list_refs()}
+
+
+def _import_look(avatar_url, banner_url, vids, limit_thumbs):
+    """Save a channel's avatar as a character reference and its banner + most-viewed thumbnails
+    as style references. A reference the account has no room for is skipped, not an error."""
+    added = {"character": 0, "style": 0}
+
+    def keep(kind, data):
+        if not data:
+            return
+        try:
+            save_ref(kind, data, "image/jpeg")
+            added[kind] += 1
+        except RefError:
+            pass
+
+    keep("character", _download(avatar_url))
+    keep("style", _download(banner_url))
+    vids = sorted(vids, key=lambda v: v.get("views") or 0, reverse=True)
     for v in vids[:limit_thumbs]:
-        b = _download(v.get("thumb") or f"https://i.ytimg.com/vi/{v['video_id']}/hqdefault.jpg")
-        if b:
-            save_ref("style", b, "image/jpeg"); added["style"] += 1
+        vid = v.get("video_id")
+        data = _download(f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg") if vid else None
+        keep("style", data or _download(v.get("thumb")))
+    return added
+
+
+def import_from_public(yt, ref, limit_thumbs=5):
+    """Import any channel's look by @handle, channel URL or UC id through the public Data API
+    (about 3 quota units), so an account with no tracked channels can still bring its brand."""
+    from . import search
+    hit = search._direct_ref((ref or "").strip())
+    if not hit:
+        raise RefError("Paste your channel's @handle or its youtube.com link.")
+    kind, val = hit
+    found = yt.channels_by_ids([val]) if kind == "id" else [yt.channel_by_handle(val)]
+    ch = next((c for c in found if c), None)
+    if not ch:
+        raise RefError("Couldn't find that channel.")
+    vids = []
+    if ch.get("uploads_playlist"):
+        ids = yt.playlist_video_ids(ch["uploads_playlist"], limit=50)
+        if ids:
+            vids = [v for v in yt.videos(ids) if v.get("privacy") in (None, "public")]
+    added = _import_look(ch.get("thumb"), ch.get("banner"), vids, limit_thumbs)
     return {"added": added, "channel": ch.get("title"), "refs": list_refs()}
 
 
@@ -177,7 +300,23 @@ def generate(cfg, style="mrbeast", subject="", text="", extra="", refs=None, asp
             ref_meta.append((kind, rid))
     prompt = build_prompt(style, subject, text, extra, ref_meta)
     img = imagegen.generate_image(cfg["gemini_api_key"], prompt, refs=ref_files, aspect_ratio=aspect)
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    od = out_dir(); od.mkdir(parents=True, exist_ok=True)
     oid = f"{int(time.time())}_{uuid.uuid4().hex[:6]}"
-    (OUT_DIR / f"{oid}.png").write_bytes(img)
+    (od / f"{oid}.png").write_bytes(img)
     return {"id": oid, "url": f"/thumbs/out/{oid}.png", "prompt": prompt, "refs_used": len(ref_files)}
+
+
+def migrate_legacy():
+    """One-time: move the pre-multi-user thumbnail store (data/thumbs/refs + outputs) under the
+    owner account (data/thumbs/u1/). Safe to call on every start — a no-op once migrated."""
+    root = config.DATA / "thumbs"
+    u1 = root / "u1"
+    for name in ("refs", "outputs"):
+        src = root / name
+        dst = u1 / name
+        if src.exists() and not dst.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                src.rename(dst)
+            except Exception:
+                pass

@@ -32,8 +32,10 @@ def _studio(channel_id, video_id=None):
     return f"https://studio.youtube.com/channel/{channel_id}"
 
 
-def scan_channel(store, channel, videos, prev_state, now=None):
-    """Return (alerts, new_state). prev_state is the per-channel JSON from the last scan."""
+def scan_channel(store, channel, videos, prev_state, now=None, sees_private=False):
+    """Return (alerts, new_state). prev_state is the per-channel JSON from the last scan.
+    sees_private: this scan came through the channel's own OAuth token, so private and
+    scheduled uploads are in `videos`. Public data never lists them."""
     now = now or time.time()
     cid = channel["channel_id"]
     title = channel.get("title") or cid
@@ -82,8 +84,11 @@ def scan_channel(store, channel, videos, prev_state, now=None):
                            "video_id": v["video_id"], "title": f"{title}: scheduled “{v.get('title')}” has no description",
                            "message": f"Publishes {v['publish_at']}.", "link": _studio(cid, v["video_id"])})
 
+    # "Schedule running low" only means something when the scan could see scheduled uploads.
+    # Public data never lists them, so a channel tracked from public data used to read
+    # "only 0 scheduled" every single day.
     count = len(metrics.scheduled(videos))
-    if count <= metrics.GOOD_OVER and not first_scan:
+    if sees_private and count <= metrics.GOOD_OVER and not first_scan:
         day = time.strftime("%Y-%m-%d", time.gmtime(now))
         alerts.append({"key": f"stock:{cid}:{day}", "kind": "low_stock", "channel_id": cid,
                        "title": f"{title}: only {count} scheduled", "message": "Below the 7-video buffer.",
@@ -103,13 +108,34 @@ def scan_channel(store, channel, videos, prev_state, now=None):
     return alerts, {"videos": state_videos, "subscribers": subs, "scanned_at": now}
 
 
-def run_scan(store, channel, videos, now=None):
+def run_scan(store, channel, videos, now=None, sees_private=False):
     key = f"alert_state:{channel['channel_id']}"
     prev = store.get_setting(key, {}) or {}
-    alerts, state = scan_channel(store, channel, videos, prev, now)
+    alerts, state = scan_channel(store, channel, videos, prev, now, sees_private=sees_private)
     new = [a for a in alerts if store.add_alert(a)]
     store.set_setting(key, state)
     return new
+
+
+def retire_blind_stock_alerts(store):
+    """Dismiss open "only N scheduled" alerts on channels whose last sync could not see private
+    uploads (tracked from public data, or a dead/expired link that fell back to it). Idempotent;
+    run at start-up. Returns how many were dismissed."""
+    rows = store._all("SELECT id, channel_id FROM alerts WHERE kind='low_stock' AND dismissed=0")
+    seen = {}
+    n = 0
+    now = time.time()
+    for r in rows:
+        cid = r["channel_id"]
+        if cid not in seen:
+            # sync_channel stamps sees_private:<cid> when the channel's own token worked and
+            # clears it when it fell back to public data (a dead or expired link)
+            ts = store.get_setting(f"sees_private:{cid}") or 0
+            seen[cid] = bool(ts) and now - float(ts) < 2 * 86400
+        if not seen[cid]:
+            store._exec("UPDATE alerts SET dismissed=1 WHERE id=?", (r["id"],))
+            n += 1
+    return n
 
 
 def deliver_discord(store, webhook_url, limit=15):

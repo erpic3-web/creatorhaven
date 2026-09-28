@@ -321,25 +321,6 @@ def rank_checker(yt, keyword, target, region=None, limit=100):
             "top": res[:10]}
 
 
-def tag_rank_checker(yt, video, region=None, max_tags=15):
-    vid = video_id(video)
-    vids = yt.videos([vid])
-    if not vids:
-        raise ToolError("Video not found")
-    tags = list(vids[0].get("tags") or [])
-    if not tags:
-        try:
-            tags = innertube.monetization_signals(innertube.player(vid)).get("keywords") or []
-        except Exception:
-            tags = []
-    out = []
-    for t in tags[:max_tags]:
-        res = yt.search(q=t, limit=50, region=region)
-        rank = next((i for i, r in enumerate(res, 1) if r.get("video_id") == vid), None)
-        out.append({"tag": t, "rank": rank})
-    return {"video_id": vid, "title": vids[0].get("title"), "tags_checked": len(out), "tags_total": len(tags),
-            "ranks": out, "quota_note": f"{len(out) * 100} quota units used (100 per tag)."}
-
 
 def sponsor_locator(video):
     vid = video_id(video)

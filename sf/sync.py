@@ -103,6 +103,7 @@ def sync_channel(store, cfg, channel, tokens, api_base=api_youtube.API_BASE,
     except Exception as e:
         # dead / revoked token -> fall back to PUBLIC data so the channel still fills
         pub = public_client(store, cfg, tokens)
+        store.set_setting(f"sees_private:{cid}", 0)   # public data cannot see scheduled uploads
         if pub:
             log(f"[sync] {channel.get('title') or cid}: token dead, using public data")
             return sync_channel_public(store, cfg, channel, pub, log=log)
@@ -122,6 +123,12 @@ def sync_channel(store, cfg, channel, tokens, api_base=api_youtube.API_BASE,
         vids = yt.videos(ids)
         store.upsert_videos(cid, vids)
         summary["videos"] = len(vids)
+        store.set_setting(f"sees_private:{cid}", time.time())   # this sync saw private + scheduled uploads
+        try:
+            from . import search as _search
+            _search.record_video_snapshots(store, cid, vids)
+        except Exception:
+            pass
     except Exception as e:
         msg = f"Data API: {getattr(e, 'message', None) or e}"
         summary["errors"].append(msg)
@@ -155,7 +162,7 @@ def sync_channel(store, cfg, channel, tokens, api_base=api_youtube.API_BASE,
     try:
         fresh = store.channel(cid)
         fresh["stats"] = json.loads(fresh.get("stats_json") or "{}")
-        new_alerts = alerts_mod.run_scan(store, fresh, store.videos(cid))
+        new_alerts = alerts_mod.run_scan(store, fresh, store.videos(cid), sees_private=True)
         summary["alerts"] = len(new_alerts)
     except Exception as e:
         summary["errors"].append(f"alerts: {e}")
@@ -200,6 +207,10 @@ def sync_channel_public(store, cfg, channel, pub, log=print):
             vids = pub.videos(ids)
             store.upsert_videos(cid, vids)
             summary["videos"] = len(vids)
+            try:
+                _search.record_video_snapshots(store, cid, vids)
+            except Exception:
+                pass
     except Exception as e:  # noqa: BLE001
         msg = f"Data API: {getattr(e, 'message', None) or e}"
         summary["errors"].append(msg)
@@ -209,7 +220,7 @@ def sync_channel_public(store, cfg, channel, pub, log=print):
     try:
         fresh = store.channel(cid)
         fresh["stats"] = json.loads(fresh.get("stats_json") or "{}")
-        summary["alerts"] = len(alerts_mod.run_scan(store, fresh, store.videos(cid)))
+        summary["alerts"] = len(alerts_mod.run_scan(store, fresh, store.videos(cid), sees_private=False))
     except Exception as e:  # noqa: BLE001
         summary["errors"].append(f"alerts: {e}")
     store.set_channel_sync(cid, error=("; ".join(summary["errors"]) or None))
@@ -295,8 +306,8 @@ def channel_window(store, channel_id, days):
     return store.daily(channel_id, start.isoformat(), end.isoformat())
 
 
-def overview(store, cfg, days=28, user_id=1):
-    channels = store.channels(user_id)
+def overview(store, cfg, days=28, user_id=None):
+    channels = store.channels(user_id)   # None -> the signed-in user (store thread-local)
     rows_by = {c["channel_id"]: channel_window(store, c["channel_id"], days) for c in channels}
     combined = metrics.combine_daily(rows_by)
     per = []

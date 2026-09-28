@@ -102,7 +102,7 @@ def niche_queries(store, n=8, recent_days=120):
     """Search terms for the niche, derived from the network's own tags: a tag counts ONCE per
     channel (so 200 identical tag walls from one uploader don't dominate), generic words and
     channel names are dropped, multi-word tags win ties."""
-    pinned = store.get_setting(QUERIES_KEY)
+    pinned = store.get_user_setting(QUERIES_KEY)
     if isinstance(pinned, list) and pinned:
         return [str(q).strip() for q in pinned if str(q).strip()][:12]
     cutoff = (_now() - timedelta(days=recent_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -259,14 +259,14 @@ def refresh(store, yt, days=DEFAULT_DAYS, queries=None, log=None, niche=True, fo
         err = "no YouTube client (link a channel or set a YouTube API key) — niche feed skipped"
     data = {"ts": time.time(), "days": days, "queries": q, "units": units, "network": net, "niche": rows, "formats": list(formats or ("long",)),
             "error": err, "took_s": round(time.time() - t0, 1)}
-    store.set_setting(LATEST_KEY, data)
+    store.set_user_setting(LATEST_KEY, data)
     if log:
         log(f"[radar] {len(net)} network outliers, {len(rows)} niche outliers, {units} units, {data['took_s']}s")
     return data
 
 
 def latest(store):
-    d = store.get_setting(LATEST_KEY)
+    d = store.get_user_setting(LATEST_KEY)
     return d if isinstance(d, dict) else None
 
 

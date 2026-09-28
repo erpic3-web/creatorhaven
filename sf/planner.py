@@ -16,8 +16,9 @@ def _ensure(store):
         notify INTEGER DEFAULT 1, alerted INTEGER DEFAULT 0, created_at REAL)""")
 
 
-def add(store, day, title, channel_id=None, note="", notify=True, user_id=1):
+def add(store, day, title, channel_id=None, note="", notify=True, user_id=None):
     _ensure(store)
+    user_id = store._uid(user_id)
     store._exec("INSERT INTO content_plan(user_id,day,title,channel_id,note,status,notify,alerted,created_at) "
                 "VALUES(?,?,?,?,?,'planned',?,0,?)",
                 (user_id, day, title, channel_id, note, 1 if notify else 0, time.time()))
@@ -25,8 +26,9 @@ def add(store, day, title, channel_id=None, note="", notify=True, user_id=1):
     return row
 
 
-def items(store, start=None, end=None, user_id=1):
+def items(store, start=None, end=None, user_id=None):
     _ensure(store)
+    user_id = store._uid(user_id)
     q, p = "SELECT * FROM content_plan WHERE user_id=?", [user_id]
     if start:
         q += " AND day>=?"; p.append(start)
@@ -35,8 +37,9 @@ def items(store, start=None, end=None, user_id=1):
     return store._all(q + " ORDER BY day, id", tuple(p))
 
 
-def update(store, pid, fields, user_id=1):
+def update(store, pid, fields, user_id=None):
     _ensure(store)
+    user_id = store._uid(user_id)
     allowed = {"day", "title", "channel_id", "note", "status", "notify"}
     sets, vals = [], []
     for k, v in fields.items():
@@ -50,15 +53,17 @@ def update(store, pid, fields, user_id=1):
     return store._one("SELECT * FROM content_plan WHERE id=? AND user_id=?", (pid, user_id))
 
 
-def delete(store, pid, user_id=1):
+def delete(store, pid, user_id=None):
     _ensure(store)
+    user_id = store._uid(user_id)
     store._exec("DELETE FROM content_plan WHERE id=? AND user_id=?", (pid, user_id))
 
 
-def check_due(store, cfg=None, user_id=1):
+def check_due(store, cfg=None, user_id=None):
     """Emit one reminder alert per due, notify-on, not-yet-alerted plan item. Alerts are
     delivered to Discord by the normal alerts pipeline. Returns how many were raised."""
     _ensure(store)
+    user_id = store._uid(user_id)
     today = date.today().isoformat()
     due = store._all("SELECT * FROM content_plan WHERE user_id=? AND notify=1 AND alerted=0 "
                      "AND status!='done' AND day<=?", (user_id, today))
@@ -73,3 +78,19 @@ def check_due(store, cfg=None, user_id=1):
         store._exec("UPDATE content_plan SET alerted=1 WHERE id=?", (it["id"],))
         n += int(bool(ok))
     return n
+
+
+def check_due_all(store, cfg=None):
+    """Background sweep: raise due-post reminders for every user's content plan."""
+    _ensure(store)
+    total = 0
+    try:
+        uids = [u["id"] for u in store.list_users()]
+    except Exception:
+        uids = [1]
+    for uid in uids or [1]:
+        try:
+            total += check_due(store, cfg, user_id=uid)
+        except Exception:
+            pass
+    return total
