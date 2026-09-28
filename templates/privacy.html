@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy · {{ app_name }}</title>
+<style>
+  :root { --bg:#F9F8F6; --ink:#1A1A1A; --muted:#5C574E; --line:#E4E0D6; --accent:#FF4500; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141311; --ink:#F2EFE9; --muted:#ABA597; --line:#34312C; } }
+  body { background:var(--bg); color:var(--ink); font:16px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin:0; }
+  main { max-width:760px; margin:0 auto; padding:40px 20px 80px; }
+  h1 { font-size:30px; margin:0 0 4px; } h2 { font-size:19px; margin:34px 0 8px; }
+  p, li { color:var(--ink); } .muted { color:var(--muted); }
+  a { color:var(--accent); } ul { padding-left:22px; } hr { border:0; border-top:1px solid var(--line); margin:30px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>{{ app_name }} privacy policy</h1>
+  <p class="muted">Effective 28 September 2026. This covers the {{ app_name }} website{% if base_url %} ({{ base_url }}){% endif %} and the {{ app_name }} browser extension.</p>
+
+  <h2>What we store about you</h2>
+  <ul>
+    <li><b>Your account:</b> your email address, a display name and your password, stored only as a salted hash. If you sign in with Google or Discord we store the email, name and picture those services share.</li>
+    <li><b>What you add:</b> the channels you track, your plans and notes, alerts, the reference images you upload and the thumbnails you generate. These are private to your account.</li>
+    <li><b>Linked channels:</b> if you link your own YouTube channel, we store the Google refresh token that lets the site read that channel's statistics (read-only) and refresh them. You can remove a linked channel at any time.</li>
+  </ul>
+
+  <h2>YouTube data</h2>
+  <p>{{ app_name }} uses the YouTube Data API and, for channels you link yourself, the YouTube Analytics API (read-only). Public numbers about channels and videos are cached so they don't have to be fetched again. By using {{ app_name }} you also agree to the <a href="https://www.youtube.com/t/terms" rel="noopener">YouTube Terms of Service</a>; Google's handling of that data is covered by the <a href="https://policies.google.com/privacy" rel="noopener">Google Privacy Policy</a>. You can revoke the site's access to your Google account at <a href="https://myaccount.google.com/permissions" rel="noopener">myaccount.google.com/permissions</a>.</p>
+
+  <h2>The browser extension</h2>
+  <ul>
+    <li><b>On youtube.com</b> it reads the channel names, view counts and video IDs shown on the page to draw outlier badges and stats. It sends channel handles/IDs and video IDs to {{ app_name }} to look up those numbers. It does not send your browsing history, your searches or anything you type.</li>
+    <li><b>On studio.youtube.com</b> it reads numbers Studio already shows you and, to add extra stats (engaged views, how your latest video ranks against all your videos), asks Studio for them using the Studio session already open in your browser. Your Google cookies and Studio session details stay in your browser and are never sent to {{ app_name }}.</li>
+    <li><b>"Send my Studio numbers to my account"</b> is off unless you switch it on. When on, it sends the channel statistics you can see in Studio to your own {{ app_name }} account so the dashboard can show them.</li>
+    <li><b>The Ad Placer</b> only acts when you click it, and never saves anything in Studio. You review and press Save yourself.</li>
+    <li>Extension settings and your personal extension key are stored in your browser's extension storage.</li>
+  </ul>
+
+  <h2>AI features</h2>
+  <p>When you use an AI tool (ideas, the video predictor, thumbnail review or generation), what you submit — text, images, or a video you upload — is sent to Google's Gemini API to produce the result.</p>
+
+  <h2>What we don't do</h2>
+  <ul>
+    <li>We don't sell or rent your data, show ads, or use third-party trackers or analytics.</li>
+    <li>We don't use your data for anything other than running the features you use.</li>
+  </ul>
+
+  <h2>Keeping and deleting your data</h2>
+  <p>Your data is kept while your account exists. You can delete your account and everything in it at any time from <b>Settings → Account → Delete my account</b>. Cached public YouTube numbers expire on their own within days.</p>
+
+  <h2>Contact</h2>
+  <p>Questions or requests: {% if owner_email %}<a href="mailto:{{ owner_email }}">{{ owner_email }}</a>{% else %}use the contact address on the {{ app_name }} extension's Chrome Web Store page{% endif %}.</p>
+  <hr>
+  <p class="muted"><a href="/">Back to {{ app_name }}</a></p>
+</main>
+</body>
+</html>

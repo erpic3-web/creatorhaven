@@ -14,11 +14,11 @@
 <link rel="icon" href="/static/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=Dancing+Script:wght@500;600&family=Space+Grotesk:wght@500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Space+Mono:wght@400;700&family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=Dancing+Script:wght@500;600&family=Space+Grotesk:wght@500;600&display=swap">
 <style>
-:root { --bg:#0b0b0c; --panel:#131315; --panel2:#1a1a1d; --line:#26262a; --line2:#333338; --text:#f2f2f3; --muted:#9a9aa3; --dim:#6b6b73;
-  --gold:#d4af37; --gold-soft:rgba(212,175,55,.14); --bad:#e5484d; --good:#3dd68c; --radius:14px;
-  --font:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif; --serif:"Instrument Serif",Georgia,serif; --mono:"Space Grotesk",ui-monospace,monospace;
+:root { --bg:#F9F8F6; --panel:#FFFFFF; --panel2:#F0EDE7; --line:#E4E0D6; --line2:#1A1A1A; --text:#1A1A1A; --muted:#5C574E; --dim:#A69F91;
+  --gold:#FF4500; --gold-soft:rgba(255,69,0,.10); --bad:#C4302B; --good:#1B7F4B; --radius:0px;
+  --font:"Space Mono",ui-monospace,monospace; --serif:"Anton","Arial Narrow","Impact",sans-serif; --mono:"Space Mono",ui-monospace,monospace;
   --tabs:64px; --sat:env(safe-area-inset-top,0px); --sab:env(safe-area-inset-bottom,0px); }
 * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
 html, body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 var(--font); overscroll-behavior-y:none; }
@@ -43,6 +43,8 @@ a { color:var(--gold); text-decoration:none; }
 h2 { font:italic 400 26px var(--serif); margin:6px 0 10px; }
 h3 { font:600 11px var(--mono); letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin:18px 0 8px; }
 .muted { color:var(--muted); } .small { font-size:12px; } .err { color:var(--bad); }
+#login input { width:100%; box-sizing:border-box; padding:11px 12px; border-radius:var(--radius); border:1px solid var(--line2,#333); background:var(--panel); color:var(--fg,#eee); font:inherit; }
+.oauth-btn { display:block; text-align:center; padding:11px; border-radius:var(--radius); border:1px solid var(--line2,#333); color:var(--fg,#eee); text-decoration:none; font-weight:600; font-size:13px; background:var(--panel); }
 .panel { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:14px; margin-bottom:10px; }
 .tiles { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
 .tile { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px; }
@@ -114,16 +116,35 @@ h3 { font:600 11px var(--mono); letter-spacing:.12em; text-transform:uppercase; 
 .login { position:fixed; inset:0; background:var(--bg); z-index:50; display:grid; place-items:center; padding:24px; }
 .login .card { width:100%; max-width:360px; }
 .toast { position:fixed; left:50%; bottom:calc(var(--tabs) + var(--sab) + 12px); transform:translateX(-50%); background:#fff; color:#111; padding:9px 14px; border-radius:20px; font-size:13px; font-weight:600; z-index:60; box-shadow:0 8px 30px rgba(0,0,0,.5); }
+
+/* ---- CreatorHaven editorial flip (mobile) ---- */
+button, input, select, textarea, .panel, .tile, .pill, .chips button, .slate, .idea, .media img, .slate img, .hdr select, .turn.user .body, .oauth-btn, #login input, .card, .toast { border-radius:0 !important; }
+button.primary, .primary { background:var(--gold) !important; border-color:var(--gold) !important; color:#fff !important; font-weight:700; letter-spacing:.06em; text-transform:uppercase; }
+.hdr h1, h2, .md h4 { font-family:var(--serif) !important; font-style:normal !important; text-transform:uppercase; letter-spacing:.01em; }
+.hdr h1 { font-size:22px; } h2 { font-size:26px; line-height:.92; } .md h4 { color:var(--gold); }
+.tile .v { font-family:var(--serif); font-style:normal; font-size:30px; line-height:.9; letter-spacing:0; }
+.pill.gold, .x.hot { color:var(--gold) !important; border-color:var(--gold) !important; background:var(--gold-soft) !important; }
+.x.warm { color:#B4690E !important; border-color:#B4690E !important; }
+.cursive { color:var(--text); }
+.hdr { background:linear-gradient(var(--bg) 70%, rgba(249,248,246,0)); border-bottom:2px solid var(--text); }
+.md li::marker, .who i, .slate .lab, a { color:var(--gold); }
 </style>
 </head>
 <body>
 <div id="login" class="login hidden"><div class="card panel">
   <img class="mark" src="/static/mark.png" alt="" style="margin-bottom:10px">
   <h2 style="margin-top:0">{{ app_name }}</h2>
-  <p class="muted small">Enter the site password to open the studio.</p>
-  <input id="pw" type="password" placeholder="Password" autocomplete="current-password">
-  <button id="pwGo" class="primary" style="width:100%;margin-top:10px">Open</button>
-  <p id="pwErr" class="err small"></p>
+  <p id="mIntro" class="muted small">Sign in to open your studio.</p>
+  <div id="mOauth" class="hidden" style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px">
+    <a id="mGoogle" class="oauth-btn hidden" href="/auth/google">Continue with Google</a>
+    <a id="mDiscord" class="oauth-btn hidden" href="/auth/discord">Continue with Discord</a>
+  </div>
+  <input id="mName" class="hidden" type="text" placeholder="Display name" autocomplete="nickname" style="margin-bottom:8px">
+  <input id="mEmail" type="email" placeholder="Email" autocomplete="email" style="margin-bottom:8px">
+  <input id="mPw" type="password" placeholder="Password" autocomplete="current-password">
+  <button id="mGo" class="primary" style="width:100%;margin-top:10px">Sign in</button>
+  <p id="mErr" class="err small"></p>
+  <p class="muted small" style="text-align:center"><span id="mSwitchText">New here?</span> <a id="mSwitch" href="#" style="color:var(--accent,#dc2626)">Create an account</a></p>
 </div></div>
 
 <header class="hdr"><img class="mark" src="/static/mark.png" alt=""><h1 id="hTitle">Studio Brain</h1><select id="focus" title="Focus channel"><option value="">All channels</option></select></header>
@@ -193,9 +214,33 @@ h3 { font:600 11px var(--mono); letter-spacing:.12em; text-transform:uppercase; 
   const focus = () => $('#focus').value || null;
   const state = { rdFeed: 'niche', radar: null, chans: [] };
 
-  // ---- login gate
-  $('#pwGo').onclick = async () => { const j = await api('/api/login', { method: 'POST', body: { password: $('#pw').value } }); if (j.ok) { $('#login').classList.add('hidden'); boot(); } else $('#pwErr').textContent = j.error || 'wrong password'; };
-  $('#pw').addEventListener('keydown', e => { if (e.key === 'Enter') $('#pwGo').click(); });
+  // ---- account sign in / sign up
+  let authMode = 'login';
+  function setAuthMode(m) {
+    authMode = m; const su = m === 'signup';
+    $('#mName').classList.toggle('hidden', !su);
+    $('#mGo').textContent = su ? 'Create account' : 'Sign in';
+    $('#mIntro').textContent = su ? 'Create your studio.' : 'Sign in to open your studio.';
+    $('#mSwitchText').textContent = su ? 'Already have an account?' : 'New here?';
+    $('#mSwitch').textContent = su ? 'Sign in' : 'Create an account';
+    $('#mErr').textContent = '';
+  }
+  function showAuthProviders(p) {
+    p = p || {};
+    $('#mGoogle').classList.toggle('hidden', !p.google);
+    $('#mDiscord').classList.toggle('hidden', !p.discord);
+    $('#mOauth').classList.toggle('hidden', !(p.google || p.discord));
+  }
+  async function submitAuth() {
+    const email = $('#mEmail').value.trim(), pw = $('#mPw').value, name = $('#mName').value.trim();
+    if (!email || !pw) { $('#mErr').textContent = 'Enter your email and password.'; return; }
+    const j = await api(authMode === 'signup' ? '/api/auth/signup' : '/api/auth/login', { method: 'POST', body: { email, password: pw, name } });
+    if (j.ok) { $('#mPw').value = ''; $('#login').classList.add('hidden'); boot(); } else $('#mErr').textContent = j.error || 'Could not sign you in.';
+  }
+  $('#mGo').onclick = submitAuth;
+  $('#mSwitch').onclick = e => { e.preventDefault(); setAuthMode(authMode === 'signup' ? 'login' : 'signup'); };
+  ['mEmail', 'mPw', 'mName'].forEach(id => $('#' + id).addEventListener('keydown', e => { if (e.key === 'Enter') submitAuth(); }));
+  if (new URLSearchParams(location.search).get('auth_error')) $('#mErr').textContent = 'That sign-in did not complete. Try again.';
 
   // ---- tabs
   const TITLES = { Home: 'CreatorHaven', Brain: 'Studio Brain', Radar: 'Outlier radar', Plan: 'Plan', Alerts: 'Alerts' };
@@ -372,7 +417,7 @@ h3 { font:600 11px var(--mono); letter-spacing:.12em; text-transform:uppercase; 
   // ---- boot
   async function boot() {
     const s = await api('/api/status');
-    if (s.authed === false) { $('#login').classList.remove('hidden'); return; }
+    if (s.authed === false) { showAuthProviders(s.auth); $('#login').classList.remove('hidden'); return; }
     const cj = await api('/api/channels'); state.chans = cj.channels || [];
     $('#focus').innerHTML = '<option value="">All channels</option>' + state.chans.map(c => `<option value="${c.channel_id}">${esc(c.title || c.channel_id)}</option>`).join('');
     await loadBrain();

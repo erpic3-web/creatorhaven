@@ -7,19 +7,30 @@
 <script>(function(){try{var r=document.documentElement;r.setAttribute('data-theme',localStorage.getItem('sf_theme')||'system');r.setAttribute('data-bg',localStorage.getItem('sf_bg')||'cloudline');}catch(e){}})();</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@500;600&family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=20">
-<link rel="stylesheet" href="/static/brain.css?v=2">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Dancing+Script:wght@500;600&family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/static/style.css?v=20260928a">
+<link rel="stylesheet" href="/static/brain.css?v=3">
 <link rel="icon" href="/static/favicon.png"><link rel="apple-touch-icon" href="/static/icon-192.png">
 </head>
 <body data-app="{{ app_name }}" data-version="{{ version }}">
 <div id="login" class="login hidden">
-  <div class="card">
+  <div class="card auth-card">
     <h1>{{ app_name }}</h1>
-    <p>Enter the site password.</p>
-    <input id="pw" type="password" placeholder="password" autofocus>
-    <button id="pwgo" class="primary">Sign in</button>
-    <div id="pwerr" class="err"></div>
+    <p id="authIntro">Sign in to your workspace.</p>
+    <div id="authOauth" class="auth-oauth hidden">
+      <a id="authGoogle" class="oauth-btn hidden" href="/auth/google">Continue with Google</a>
+      <a id="authDiscord" class="oauth-btn hidden" href="/auth/discord">Continue with Discord</a>
+      <div class="auth-or"><span>or</span></div>
+    </div>
+    <input id="authName" class="hidden" type="text" placeholder="Display name" autocomplete="nickname">
+    <input id="authEmail" type="email" placeholder="Email" autocomplete="email">
+    <input id="authPw" type="password" placeholder="Password" autocomplete="current-password">
+    <button id="authGo" class="primary">Sign in</button>
+    <div id="authErr" class="err"></div>
+    <div class="auth-switch">
+      <span id="authSwitchText">New to {{ app_name }}?</span>
+      <a id="authSwitch" href="#">Create an account</a>
+    </div>
   </div>
 </div>
 
@@ -222,10 +233,12 @@
           <h3>Style</h3><div class="style-grid" id="gnStyles"></div>
           <label class="mt">Scene / subject<textarea id="gnSubject" rows="2" placeholder="e.g. me holding a giant check, shocked, money raining down"></textarea></label>
           <label>Text on thumbnail <span class="tiny">(optional)</span><input id="gnText" placeholder="e.g. $1,000,000"></label>
-          <div class="refkind" style="margin-top:14px">References</div>
-          <div class="row" style="gap:8px;margin-bottom:2px"><select id="gnImportChan" style="flex:1"></select><button id="gnImport" class="ghost small" title="Pull this channel's avatar + top thumbnails in as references">⬇ Import mine</button></div>
+          <div class="refkind" style="margin-top:14px">Your references <span class="tiny">private to your account</span></div>
+          <p class="tiny muted" id="gnRefHint" style="margin:4px 0 8px">Add your own face, character, logo or style images with ＋, then click the ones to use. Nobody else can see them.</p>
+          <div class="row" style="gap:8px;margin-bottom:2px"><input id="gnImportChan" list="gnImportList" placeholder="Import your channel's look: @handle or link" style="flex:1"><datalist id="gnImportList"></datalist><button id="gnImport" class="ghost small" title="Pull a channel's avatar, banner and top thumbnails in as references">⬇ Import</button></div>
           <div id="gnRefs"></div>
           <button id="gnGo" class="primary wide mt">Generate thumbnail</button>
+          <div id="gnAllow" class="tiny muted mt"></div>
           <div id="gnMsg" class="msg mt"></div>
         </div>
         <div class="gen-stage">
@@ -241,7 +254,7 @@
   </section>
 
   <section id="tab-alerts" class="tab">
-    <div class="row between"><h2>Alerts</h2><div class="row"><label class="chk"><input type="checkbox" id="alertsAll"> show dismissed</label><button id="alertsDeliver" class="ghost">Send new alerts to Discord</button></div></div>
+    <div class="row between"><h2>Alerts</h2><div class="row"><label class="chk"><input type="checkbox" id="alertsAll"> show dismissed</label><button id="alertsDismissAll" class="ghost">Dismiss all</button><button id="alertsDeliver" class="ghost">Send new alerts to Discord</button></div></div>
     <div id="alertsList"></div>
   </section>
 
@@ -259,6 +272,19 @@
 
   <section id="tab-settings" class="tab">
     <h2>Settings</h2>
+    <div class="panel" id="acctPanel" style="margin-bottom:12px">
+      <h3>Account</h3>
+      <p class="muted">Signed in as <b id="acctWho">…</b><span id="acctRole"></span>. Your channels, ideas, thumbnails and chat are private to your account.</p>
+      <div class="row" style="gap:8px;flex-wrap:wrap"><button id="signOutBtn" class="ghost small">Sign out</button><button id="deleteAcctBtn" class="ghost small hidden">Delete my account</button><a class="tiny" href="/privacy" target="_blank" rel="noopener" style="align-self:center">Privacy</a></div>
+    </div>
+    <div class="panel hidden" id="whitelistPanel" style="margin-bottom:12px">
+      <h3>Access &amp; whitelist <span class="tiny">owner only</span></h3>
+      <p class="muted">You are the <b>owner</b> (<span id="wlOwner">…</span>). Whitelisted accounts get the AI features — Studio brain, ideas and the thumbnail generator — plus the special settings. Everyone else who signs up gets the standard creator features (dashboard, search, tools). Whitelisted accounts can't change the shared API keys — those stay yours.</p>
+      <label class="chk"><input type="checkbox" id="wlAiOnly"> Gate the AI (Gemini) features behind the whitelist</label>
+      <div class="row mt" style="gap:8px;align-items:center;flex-wrap:wrap"><label for="wlThumbs" class="muted" style="margin:0">Free thumbnails per day for every other account (0 = whitelist only)</label><input id="wlThumbs" type="number" min="0" max="1000" style="width:90px"><button id="wlThumbsSave" class="ghost small">Save</button><span id="wlThumbsMsg" class="msg"></span></div>
+      <div id="wlList" class="mt"></div>
+      <div class="row mt"><input id="wlEmail" placeholder="email@example.com" type="email"><button id="wlAdd" class="primary">Add to whitelist</button><span id="wlMsg" class="msg"></span></div>
+    </div>
     <div class="grid2">
       <div class="panel">
         <h3>Link a channel</h3>
@@ -315,8 +341,9 @@
         </details>
         <div class="row mt"><button id="saveSettings" class="primary">Save</button><span id="saveMsg" class="msg"></span></div>
         <h3 class="mt">Browser extension</h3>
-        <p class="muted">In the extension popup set the site URL to <code id="extUrl"></code> and this token:</p>
+        <p class="muted">In the CreatorHaven extension open <b>Account</b>, paste this key and press Connect (site: <code id="extUrl"></code>). It is YOUR key: it connects the extension to this account only.</p>
         <code id="extToken" class="tok"></code>
+        <button id="extTokenRotate" class="ghost small hidden" style="margin-top:6px">New key (the old one stops working)</button>
         <h3 class="mt">Fix a Studio control</h3>
         <p class="muted">When an extension ad tool says <em>"paste it to CreatorHaven"</em>, paste the copied markup here and send it — it lets us wire the exact button (no screenshot needed).</p>
         <textarea id="extMarkup" rows="4" placeholder="Paste the copied Studio markup here…" spellcheck="false"></textarea>
@@ -329,6 +356,7 @@
 </main>
 </div>
 <div id="toast" class="toast hidden"></div>
-<script src="/static/app.js?v=19"></script>
+<script src="/static/app.js?v=20260928a"></script>
+<script src="/static/editorial.js?v=3"></script>
 </body>
 </html>
