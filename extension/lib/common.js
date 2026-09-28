@@ -18,7 +18,7 @@
   // NOTE: "favorites" is the feature TOGGLE. The starred-channel list is stored under
   // "favoritesList" so the two keys cannot collide.
   const SF_DEFAULTS = Object.freeze({
-    siteUrl: 'http://127.0.0.1:5800',
+    siteUrl: 'https://creatorhaven.onrender.com',
     token: '',
     discordUrl: '',
     confirmSignOut: true,
@@ -40,18 +40,25 @@
     playerWidthPct: 100,
     commentsFontPx: 14,
     favorites: true,
-    studioProbe: true,
+    studioProbe: false,         // opt-in: send the Studio numbers you can see to YOUR CreatorHaven account
     studioDiscordButton: true,
     streamerMode: false,
     // Studio-side power features (studio.youtube.com)
     studioPanel: true,          // the floating CreatorHaven research + analytics-decoder panel
     studioOutlierAll: true,     // outlier score vs ALL uploads, not just the last 10
     studioExplainers: true,     // ⓘ hover cards explaining each analytics metric
-    studioAdPlacer: false,      // show the "place mid-rolls every N min" control (experimental)
-    studioAdInterval: 5,        // default minutes between auto-placed mid-rolls
+    studioAdPlacer: false,      // show the Ad Placer card (experimental)
+    studioAdInterval: 300,      // legacy field kept for back-compat; the card uses adPlacerInterval
+    adPlacerMode: 'interval',   // 'interval' | 'silence' | 'subtractive'
+    adPlacerInterval: 30,       // SECONDS between ads (0.1 - 60)
+    adPlacerStart: true,        // place an ad at 0:00
+    adPlacerEnd: false,         // place an ad at the very end
     studioRemoveRedAds: false,  // show the "remove unapproved (red) ad breaks" control (experimental)
+    studioLatestPlus: true,     // Studio dashboard "Latest video performance": rank vs ALL uploads + engaged views
+    studioProbeCapture: false,  // developer: mirror FULL Studio request/response bodies to the site (shape capture)
     // Watch-page / feed power features (www.youtube.com)
-    youtubeOutliers: true       // show an outlier multiplier (2.3×) next to video titles while browsing
+    youtubeOutliers: true,      // show an outlier multiplier (2.3×) in the channel byline while browsing
+    youtubePanel: true          // ViewStats-style watch-page panel: views, 1..10 ranking, overview, revenue
   });
 
   const BOOL_KEYS = Object.freeze(Object.keys(SF_DEFAULTS).filter(k => typeof SF_DEFAULTS[k] === 'boolean'));
@@ -80,11 +87,11 @@
     return out;
   }
 
-  // "127.0.0.1:5800/" -> "http://127.0.0.1:5800"; empty -> default.
+  // "127.0.0.1:5800/" -> "http://127.0.0.1:5800"; "example.com" -> "https://example.com"; empty -> default.
   function normalizeSiteUrl(u) {
     let s = String(u == null ? '' : u).trim();
     if (!s) return SF_DEFAULTS.siteUrl;
-    if (!/^https?:\/\//i.test(s)) s = 'http://' + s;
+    if (!/^https?:\/\//i.test(s)) s = (/^(127\.0\.0\.1|localhost)([:/]|$)/i.test(s) ? 'http://' : 'https://') + s;
     return s.replace(/\/+$/, '');
   }
 
@@ -401,6 +408,52 @@
     return list;
   }
 
+  /* ------------------------------------------------------------------ throttle */
+  // Leading-edge throttle: runs `fn` at most once per `ms`, and ALWAYS within `ms` of a call.
+  // Use instead of debounce() for "the DOM changed" handlers: YouTube/Studio mutate the DOM
+  // many times a second, and a debounce that restarts on every mutation can wait for minutes.
+  function throttle(fn, ms, first) {
+    let timer = null, last = 0;
+    const lead = first == null ? Math.min(150, ms) : first;
+    return function () {
+      if (timer) return;
+      const wait = Math.max(lead, ms - (Date.now() - last));
+      timer = setTimeout(() => { timer = null; last = Date.now(); fn(); }, wait);
+    };
+  }
+
+  /* ------------------------------------------------------------------ Studio timecodes */
+  // Studio's ad-slot editor shows times as MM:SS:FF (minutes, seconds, frames) for videos under
+  // an hour and H:MM:SS:FF above it. Frames default to 30 fps.
+  const TIMECODE_RE = /^\s*(\d{1,3}):(\d{2}):(\d{2})(?::(\d{2}))?\s*$/;
+  function parseTimecode(s, fps) {
+    const m = TIMECODE_RE.exec(String(s == null ? '' : s));
+    if (!m) return null;
+    fps = fps || 30;
+    const a = +m[1], b = +m[2], c = +m[3];
+    if (m[4] !== undefined) return a * 3600 + b * 60 + c + (+m[4]) / fps;   // H:MM:SS:FF
+    return a * 60 + b + c / fps;                                            // MM:SS:FF
+  }
+  function formatTimecode(sec, hours, fps, padHours) {
+    fps = fps || 30;
+    sec = Math.max(0, Number(sec) || 0);
+    let whole = Math.floor(sec + 1e-6);
+    let ff = Math.round((sec - whole) * fps);
+    if (ff >= fps) { whole += 1; ff = 0; }
+    const h = Math.floor(whole / 3600), m = Math.floor((whole % 3600) / 60), s = whole % 60;
+    const p2 = (n) => String(n).padStart(2, '0');
+    if (hours) return (padHours ? p2(h) : String(h)) + ':' + p2(m) + ':' + p2(s) + ':' + p2(ff);
+    return p2(h * 60 + m) + ':' + p2(s) + ':' + p2(ff);
+  }
+
+  /* ------------------------------------------------------------------ same-age ranking */
+  // rank of `mine` among `values` (higher = better, ties share a rank like Studio's card):
+  // 1 + how many values are strictly greater. Returns {rank, of}.
+  function rankAmong(mine, values) {
+    const vals = (values || []).filter((v) => typeof v === 'number' && isFinite(v));
+    return { rank: 1 + vals.filter((v) => v > mine).length, of: vals.length + 1 };
+  }
+
   /* ------------------------------------------------------------------ export */
 
   const SF = {
@@ -411,8 +464,9 @@
     channelIdFromPath, pathOnly, pickThumbUrl, isPlaceholderThumb,
     relativeDateRegex, formatExactDate, extractPublishDate,
     compactNumber, NUMBER_BLUR_SOURCE, numberBlurRegex, hasNumberRun, segmentNumbers, joinSegments,
-    clamp, debounce, chunk, uniq, safeJsonParse, shelfBlockRegex,
-    probeHitKeyRegex, collectProbeHits, mergeProbeEntry
+    clamp, debounce, throttle, chunk, uniq, safeJsonParse, shelfBlockRegex,
+    probeHitKeyRegex, collectProbeHits, mergeProbeEntry,
+    TIMECODE_RE, parseTimecode, formatTimecode, rankAmong
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = SF;
