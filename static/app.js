@@ -1000,24 +1000,43 @@
     });
     wrap.addEventListener('mouseleave', () => tip.classList.remove('show'));
   }
-  const WIN_LABELS = { '28d': '28 days', '3mo': '3 months', '6mo': '6 months', '1yr': '1 year', 'lifetime': 'Lifetime' };
+  const WIN_LABELS = { '7d': '7 days', '28d': '28 days', '3mo': '3 months', '6mo': '6 months', '1yr': '1 year', 'lifetime': 'Lifetime' };
+  // what the "Views · <window>" number IS, most exact first (sf/search.py _view_windows)
+  const nDays = n => n + ' day' + (n === 1 ? '' : 's');
+  function winNote(ws) {
+    if (ws.method === 'analytics') return `exact · YouTube Analytics${ws.through ? ' through ' + ws.through : ''}`;
+    if (ws.method === 'measured') return ws.interpolated
+      ? `measured · interpolated across a ${Math.round(ws.gap_days)}-day gap in the readings`
+      : `measured · exact, from daily readings since ${ws.measured_since}`;
+    const err = ws.typical_error_pct ? ` · usually within ±${ws.typical_error_pct}%` : '';
+    if (ws.method === 'partial') return `${nDays(ws.measured_days)} of ${ws.days} measured${err} · exact in ${nDays(ws.exact_in_days)}`;
+    if ((ws.measured_days || 0) >= 3) return `estimate · corrected by ${nDays(ws.measured_days)} of readings${err}`;
+    return `rough estimate from ${ws.sample || 0} uploads · sharper after ${nDays(Math.max(1, 3 - (ws.measured_days || 0)))} of daily readings`;
+  }
+  function winTip(ws) {
+    if (ws.method === 'analytics') return 'From YouTube Analytics for your linked channel: the same numbers as Studio.';
+    if (ws.method === 'measured') return 'The change in YouTube’s public view counter over this window, from CreatorHaven’s daily readings of it (how ViewStats and Social Blade count too).'
+      + (ws.interpolated ? ' Some days have no reading, so the start of the window is interpolated between the readings around it.' : '');
+    const why = ws.beyond_retention
+      ? ` YouTube lets apps keep other channels’ numbers for ${ws.retention_days || 30} days, so a window this long is always estimated: from each upload’s age and views, corrected by what the last ${nDays(Math.min(ws.measured_days || 0, 28))} measured. Linked channels show exact Analytics numbers.`
+      : ' It becomes exact once CreatorHaven has read this channel’s counter for the whole window.';
+    if (ws.method === 'partial') return `The last ${nDays(ws.measured_days)} are measured exactly; the rest is estimated from the uploads, corrected by what those days show.` + why;
+    return 'Estimated from each upload’s age and views' + ((ws.measured_days || 0) >= 3 ? ', corrected by the measured days.' : '.') + why;
+  }
   function renderLookup(j) {
     const c = j.channel, m = j.metrics, g = j.growth || {};
     const W = j.windows || {};
     const wk = (state.lkWin && W[state.lkWin]) ? state.lkWin : '28d';
     const ws = W[wk] || {};
-    // channel-wide views over the selected period (residual/evergreen decay model, summed
-    // over the uploads we fetched) — this replaces the old per-video "avg views" as the
-    // headline number, which is what Studio's "28 day views" actually measures.
+    // channel-wide views over the selected period: measured when CreatorHaven's daily readings
+    // cover it, otherwise estimated (and labelled so)
     const wsub = wk === 'lifetime'
       ? '<div class="d muted">all-time total</div>'
-      : `<div class="d muted">${ws.method === 'measured' ? `measured · ${ws.measured_days} days of daily snapshots`
-        : ws.method === 'blend' ? (ws.videos_measured ? `est · ${ws.sample} uploads · ${ws.videos_measured} anchored to ${ws.measured_days} measured days` : `est · ${ws.sample} uploads · tail calibrated on ${ws.measured_days} snapshot days`)
-        : `est · ${ws.sample || 0} uploads modelled`}${ws.back_catalog ? ` · +${fmt(ws.back_catalog)} older` : ''}</div>`;
+      : `<div class="d muted">${winNote(ws)}${ws.back_catalog && !['measured', 'analytics'].includes(ws.method) ? ` · +${fmt(ws.back_catalog)} older` : ''}</div>`;
     const d = (x, key) => x ? `<div class="d ${x[key] >= 0 ? 'up' : 'down'}">${x[key] >= 0 ? '+' : ''}${fmt(x[key])} / ${x.days}d</div>` : '<div class="d muted">tracking since today</div>';
     const tiles = [
       ['Subscribers', c.hidden_subs ? 'hidden' : fmt(c.subscribers), d(g.d30 || g.d7, 'subscribers')],
-      ['Views · ' + WIN_LABELS[wk], fmt(wk === 'lifetime' ? c.views : ws.views), wsub],
+      ['Views · ' + WIN_LABELS[wk], fmt(wk === 'lifetime' ? c.views : ws.views), wsub, wk === 'lifetime' ? '' : winTip(ws)],
       ['Total views', fmt(c.views), d(g.d30 || g.d7, 'views')],
       ['Videos', fmt(c.videos), d(g.d30 || g.d7, 'videos')],
       ['Avg views / video', fmt(m.avg_views), `<div class="d muted">last ${m.sample} · median ${fmt(m.median_views)}</div>`],
@@ -1045,7 +1064,7 @@
         <div class="row mt"><button id="lkTrack" class="${j.tracked ? 'ghost' : 'primary'}" ${j.tracked ? 'disabled' : ''}>${j.tracked ? 'Tracked (daily snapshots on)' : 'Track this channel'}</button><button id="lkRefresh" class="ghost">Refresh</button><span class="muted small">${j.cached ? 'cached' : (j.units || 0) + ' quota units'}</span></div>
       </div></div>
       ${winSeg}
-      <div class="tiles">${tiles.map(([k, v, dd]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div>${dd}</div>`).join('')}</div>
+      <div class="tiles">${tiles.map(([k, v, dd, tip]) => `<div class="tile"${tip ? ` title="${esc(tip)}"` : ''}><div class="k">${k}</div><div class="v">${v}</div>${dd}</div>`).join('')}</div>
       <div class="panel"><h3>Views of the last ${vids.length} uploads <span class="muted small">(orange = 2x+ the channel's median)</span></h3><div id="lkChart"></div></div>
       <div class="panel lk-videos"><h3>Recent uploads <span class="muted small">click a column to sort</span></h3><table><thead><tr><th></th>${thSort('title', 'Title')}${thSort('published_at', 'Published')}${thSort('views', 'Views')}${thSort('views_per_day', 'Views/day')}${thSort('outlier', 'Outlier')}${thSort('likes', 'Likes')}${thSort('comments', 'Comments')}${thSort('duration_s', 'Length')}</tr></thead><tbody>
       ${vids.map(v => `<tr><td><a href="https://youtu.be/${v.video_id}" target="_blank"><img src="${esc(v.thumb || '')}" alt=""></a></td><td class="vt"><a href="https://youtu.be/${v.video_id}" target="_blank">${esc(v.title)}</a>${v.is_short ? ' <span class="tag">short</span>' : ''}</td><td>${dateS(v.published_at)}</td><td>${full(v.views)}</td><td>${fmt(v.views_per_day)}</td><td class="outlier ${(v.outlier || 0) >= 2 ? 'hot' : ''}">${v.outlier != null ? v.outlier + '×' : '–'}</td><td>${fmt(v.likes)}</td><td>${fmt(v.comments)}</td><td>${dur(v.duration_s)}</td></tr>`).join('')}
