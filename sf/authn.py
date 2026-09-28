@@ -70,6 +70,7 @@ def google_exchange(cfg, code, redirect_uri, token_base=None):
     tok = json.loads(body.decode())
     claims = _decode_id_token(tok.get("id_token", ""))
     return {"provider": "google", "sub": claims.get("sub"), "email": claims.get("email"),
+            "email_verified": bool(claims.get("email_verified")),
             "name": claims.get("name") or (claims.get("email") or "").split("@")[0],
             "avatar": claims.get("picture")}
 
@@ -113,6 +114,7 @@ def discord_exchange(cfg, code, redirect_uri, token_base=None, me_base=None):
     avatar = (f"https://cdn.discordapp.com/avatars/{u['id']}/{u['avatar']}.png"
               if u.get("avatar") else None)
     return {"provider": "discord", "sub": str(u.get("id")), "email": u.get("email"),
+            "email_verified": bool(u.get("verified")),
             "name": u.get("global_name") or u.get("username") or "creator", "avatar": avatar}
 
 

@@ -41,6 +41,8 @@ DEFAULTS = {
     # --- multi-user sign-in ---------------------------------------------------
     "require_login": True,            # gate the whole app behind an account (accounts, not a password)
     "owner_email": "",               # if set, the account with this email claims the operator's channels
+    "owner_password": "",            # hosted: account 1 (OWNER_EMAIL) is created at boot with this password; never shown
+    "contact_email": "",             # shown on /privacy as the contact address (empty = the store listing's address)
     "admin_emails": [],              # owner-managed whitelist: these accounts get the admin (special) settings + AI
     "ai_whitelist_only": True,       # gate the paid AI features (Gemini) behind owner + whitelist
     "thumbs_daily_free": 5,          # thumbnails any other signed-in account may generate per day (0 = whitelist only)
@@ -75,6 +77,8 @@ _ENV = {
     "DISCORD_WEBHOOK_URL": ("discord_webhook_url",),
     "REQUIRE_LOGIN": ("require_login",),
     "OWNER_EMAIL": ("owner_email",),
+    "OWNER_PASSWORD": ("owner_password",),
+    "CONTACT_EMAIL": ("contact_email",),
     "GOOGLE_SIGNIN_CLIENT_ID": ("google_signin", "client_id"),
     "GOOGLE_SIGNIN_CLIENT_SECRET": ("google_signin", "client_secret"),
     "DISCORD_CLIENT_ID": ("discord_oauth", "client_id"),
