@@ -58,6 +58,21 @@ token), `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_CLIENT_TYPE`,
 `DISCORD_WEBHOOK_URL`, `DATABASE_URL`, `SF_NO_PERSIST=1`. `BASE_URL` is optional: Render's
 own `RENDER_EXTERNAL_URL` is used when it is empty.
 
+**Channel views per window (7d / 28d / 3mo / 6mo / 1yr), most exact source first.** A channel whose
+owner linked it: YouTube Analytics (the sync pulls a year of daily rows), i.e. Studio's own
+numbers. Any other channel: the site reads YouTube's public total-views counter once a day (every
+tracked channel + every channel looked up in the last 30 days, 50 per quota unit) and a window the
+readings cover is the counter's difference: exact, the way ViewStats and Social Blade count. A
+partly covered window = the measured days + the upload model for the rest, the model's tail
+corrected by what the measured days show (`sf/metrics.py channel_view_windows`; its typical error
+per window and days of readings comes from `python tools/window_calibration.py --partial`). YouTube's
+API policy (III.E.4.d) allows keeping other channels' statistics for 30 days, so for them the 3mo /
+6mo / 1yr windows stay labelled estimates; `STATS_RETENTION_DAYS` (default 30) is the switch if
+YouTube grants the III.L "derived metrics and data storage" allowance (up to 36 months). Older
+counters and stale cached lookups are deleted daily. The job runs in the background loop once per
+UTC day and behind the open, idempotent `GET /api/cron/daily`, which `.github/workflows/daily-snapshot.yml`
+pings every morning so a sleeping Render instance still takes its readings.
+
 **Durable data without porting the store.** The site keeps everything in one SQLite file
 and a Render disk is not free, so `sf/persist.py` keeps that FILE durable: when
 `DATABASE_URL` is set it restores the newest copy from a one-row `bytea` table in Postgres

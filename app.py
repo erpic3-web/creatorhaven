@@ -25,7 +25,7 @@ from sf import (api_analytics, api_youtube, authn, config, gemini, http, imagege
 from sf.store import Store                    # noqa: E402
 
 OWNER_SETTINGS = ("admin_emails", "ai_whitelist_only", "thumbs_daily_free", "ext_daily_units")
-OPEN_PATHS = ("/api/auth/", "/api/status", "/static/", "/api/ext/", "/oauth/cb", "/auth/", "/privacy",
+OPEN_PATHS = ("/api/auth/", "/api/status", "/static/", "/api/ext/", "/oauth/cb", "/auth/", "/privacy", "/api/cron/daily",
               "/favicon.ico", "/manifest.webmanifest", "/sw.js")
 
 
@@ -41,6 +41,11 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
         for k, v in (store.get_setting("cfg:overrides") or {}).items():
             if k in OWNER_SETTINGS:
                 cfg[k] = v
+    except Exception:
+        pass
+    try:                             # how long other channels' daily counters may be kept (YouTube's 30-day rule)
+        import sf.search as _search_mod
+        _search_mod.RETENTION_DAYS = max(1, int(cfg.get("stats_retention_days") or 30))
     except Exception:
         pass
     try:                             # "only 0 scheduled" alerts raised on channels we cannot see into
@@ -140,8 +145,50 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
         finally:
             state["sync_running"] = False
 
+    daily_lock = threading.Lock()
+
+    def daily_stats_job(force=False):
+        """Once per UTC day: a reading of every followed channel's public counters (tracked channels
+        + anything looked up in the last 30 days, 50 per quota unit) and the clean-up YouTube's API
+        policy asks for (other channels' counters and cached results older than 30 days)."""
+        import sf.search as search_mod
+        day = time.strftime("%Y-%m-%d", time.gmtime())
+        with daily_lock:
+            last = store.get_setting("daily_job") or {}
+            if not force and (last.get("day") == day or (last.get("retry_at") or 0) > time.time()):
+                return {"ran": False, "day": day}
+            store.set_setting("daily_job", {"day": day, "at": time.time(), "state": "running"})
+        res = {"day": day, "at": time.time()}
+        try:
+            yt = public_client()
+            if yt:
+                res["snapshots"] = search_mod.snapshot_followed(store, yt)
+            res["purged"] = search_mod.purge_unauthorized_stats(store)
+            res["caches_purged"] = search_mod.purge_stale_caches(store)
+            res["state"] = "done"
+        except Exception as e:           # a failed day is retried by the next ping or loop pass
+            res["state"] = "failed"
+            res["error"] = f"{type(e).__name__}: {e}"
+            store.set_setting("daily_job", {"day": "", "at": time.time(), "state": "failed", "error": res["error"],
+                                            "retry_at": time.time() + 1800})
+            log(f"daily job failed: {res['error']}")
+            return dict(res, ran=True)
+        store.set_setting("daily_job", res)
+        log(f"daily job: {res.get('snapshots')} purged {res.get('purged')} caches {res.get('caches_purged')}")
+        try:
+            persist.push(store)          # hosted: the snapshots survive the instance going to sleep
+        except Exception:
+            pass
+        return dict(res, ran=True)
+
+    app.sf["daily_stats_job"] = daily_stats_job
+
     def background_loop():
         while True:
+            try:
+                daily_stats_job()
+            except Exception as e:       # never let the loop die
+                log(f"daily job error: {e}")
             mins = int(cfg.get("sync_minutes") or 0)
             if mins <= 0:
                 time.sleep(60)
@@ -821,6 +868,17 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
             return jsonify({"ok": False, "error": e.message or str(e), "status": e.status}), 502
         except Exception as e:
             return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
+
+    @app.route("/api/cron/daily", methods=["GET", "POST"])
+    def cron_daily():
+        """Open on purpose: a free scheduler (GitHub Actions) pings it once a day to wake the hosted
+        site and take the day's snapshots. Runs at most once per UTC day; nothing to abuse."""
+        last = store.get_setting("daily_job") or {}
+        day = time.strftime("%Y-%m-%d", time.gmtime())
+        if last.get("day") == day:
+            return jsonify({"ok": True, "ran": False, "day": day, "state": last.get("state")})
+        threading.Thread(target=app.sf["daily_stats_job"], daemon=True, name="sf-daily").start()
+        return jsonify({"ok": True, "ran": True, "day": day, "state": "started"})
 
     @app.get("/api/lookup/channel/<cid>")
     def lookup_channel(cid):
