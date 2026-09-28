@@ -126,11 +126,45 @@ def score(bundle, verbose=True):
     return errs
 
 
+def partial_report(folders):
+    """The windows as the site computes them after S days of daily snapshots (S <= 28: YouTube's
+    30-day rule for channels that did not authorize us), vs the truth. The mean |error| per window
+    and S is what metrics.TYPICAL_ERROR shows users — re-run this after any change to the shape
+    or to channel_view_windows."""
+    wins = (("7d", 7),) + WINS
+    errs = {}
+    for f in folders:
+        b = load_bundle(f)
+        if not b["daily"]:
+            continue
+        ch, now, T, daily = b["channel"], b["now"], b["truth"], b["daily"]
+        pub = [v for v in b["uploads"] if v.get("privacy") == "public" and (v.get("views") or 0) > 0 and v.get("age_days")]
+        T = dict(T, **({"7d": sum(daily[-7:])} if len(daily) >= 7 else {}))
+        line = []
+        for S in (0, 3, 7, 14, 21, 28):
+            if S > len(daily):
+                continue
+            rows = [{"day": (now - timedelta(days=d)).strftime("%Y-%m-%d"), "views": sum(daily[:len(daily) - d])} for d in range(S, -1, -1)]
+            m = metrics.measured_from_snapshots(rows, wins) if S else None
+            r = metrics.channel_view_windows(pub, wins, now=now, measured=m, channel=ch, retention_days=30)
+            for k, _ in wins:
+                if k in T:
+                    errs.setdefault((k, S), []).append(abs(r[k]["views"] / T[k] - 1) * 100)
+            line.append(f"S={S:2} " + " ".join(f"{k} {pct(r[k]['views'], T[k]):+5.0f}%{'m' if r[k]['method'] == 'measured' else ''}" for k, _ in wins if k in T))
+        print(f"== {b['name']}\n   " + "\n   ".join(line))
+    print("\nMEAN |error| % (m = measured exactly), by window x days of snapshots:")
+    for k, _ in wins:
+        print(f"   {k:4} " + "  ".join(f"S={S:2} {statistics.mean(errs[(k, S)]):5.1f} (n={len(errs[(k, S)])})" for S in (0, 3, 7, 14, 21, 28) if (k, S) in errs))
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     folders = args or sorted(os.path.join(ROOT, "calib", f) for f in os.listdir(os.path.join(ROOT, "calib"))
                              if os.path.exists(os.path.join(ROOT, "calib", f, "uploads.json"))
                              and os.path.exists(os.path.join(ROOT, "calib", f, "truth.json")))
+    if "--partial" in sys.argv:
+        partial_report(folders)
+        return
     allerr = {}
     for f in folders:
         allerr[os.path.basename(f)] = score(load_bundle(f), verbose="--brief" not in sys.argv)
