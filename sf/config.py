@@ -47,6 +47,8 @@ DEFAULTS = {
     "ai_whitelist_only": True,       # gate the paid AI features (Gemini) behind owner + whitelist
     "thumbs_daily_free": 5,          # thumbnails any other signed-in account may generate per day (0 = whitelist only)
     "ext_daily_units": 400,          # YouTube quota units a non-owner account's extension may spend per day
+    "stats_retention_days": 30,      # other channels' daily counters are kept this long (YouTube API policy III.E.4.d;
+                                     # 1095 once YouTube grants the III.L "derived metrics and data storage" allowance)
     "google_signin": {               # "log in with Google" (web OAuth app on this host)
         "client_id": "",
         "client_secret": "",
@@ -84,6 +86,7 @@ _ENV = {
     "DISCORD_CLIENT_ID": ("discord_oauth", "client_id"),
     "DISCORD_CLIENT_SECRET": ("discord_oauth", "client_secret"),
     "EXT_TOKEN": ("ext_token",),
+    "STATS_RETENTION_DAYS": ("stats_retention_days",),
 }
 
 

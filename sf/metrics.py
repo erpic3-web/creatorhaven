@@ -198,10 +198,9 @@ OUTLIER_CLIP = (0.05, 300.0)
 CHANNEL_MULT_RANGE = (0.2, 5.0)  # sanity clamp on the two channel-level multipliers
 SHAPE_MAX_DAYS = 7400          # ~20 years; older uploads use the table's end
 LAUNCH_DAYS = 60               # a video's first 60 days = "launch" views, the rest = "tail"
-TAIL_MEMORY_DAYS = 45          # how far back a measured rate keeps correcting the model (a slump now says little about 3 months ago)
-TAIL_K_RANGE = (0.4, 2.5)      # sanity clamp on the channel-level measured/modelled tail ratio
-VIDEO_K_RANGE = (0.1, 8.0)     # per-upload ratio (a dead Short vs a recirculating one)
-MIN_MEASURED_DAYS = 7          # fewer snapshot days than this = too noisy to calibrate on (day-to-day swings of 30%)
+TAIL_K_RANGE = (0.02, 20.0)    # measured/modelled tail ratio: wide on purpose (Chica's old viral Shorts run at 0.15x the model)
+PARTIAL_MIN_DAYS = 3           # fewer snapshot days than this: the public counter's lumps swamp the rate
+COVER_SLACK_DAYS = 0.5         # a window short of the snapshot history by less than this still counts as measured
 
 
 def _build_components(p, max_days=SHAPE_MAX_DAYS):
@@ -402,41 +401,60 @@ def back_catalog_views(videos, days, total_videos, lifetime_views, channel_age_d
     return back
 
 
-def _fade(d, span):
-    return math.exp(-(d - span) / TAIL_MEMORY_DAYS)
+def tail_memory(window_days):
+    """How far back the measured tail level keeps correcting the model, in days (inf = the whole
+    window). Scored on six channels (tools/window_calibration.py): 3- and 6-month windows follow
+    the channel's CURRENT level best, while the 1-year window needs the model's own history back
+    after about two months: a burst 6-10 months ago (Chica's viral Shorts) lives in the uploads'
+    ages and view counts, not in today's rate."""
+    return math.inf if window_days <= 182 else 60.0
+
+
+# mean |error| (%) of a partly measured / anchored window on the calibration channels, by window
+# and days of snapshots held (python tools/window_calibration.py --partial, 2026-09-28: four
+# Studio exports + Chica from public counters; the pure model, 0 days, averaged 127-134% on 7/28d)
+TYPICAL_ERROR = {7: ((3, 9),),
+                 28: ((3, 20), (7, 14), (14, 7), (21, 6)),
+                 91: ((3, 22), (7, 16), (14, 16), (21, 15), (28, 16)),
+                 182: ((3, 20), (7, 18), (14, 17), (21, 17), (28, 18)),
+                 365: ((3, 12), (7, 12), (14, 12), (21, 12), (28, 13))}
+
+
+def typical_error(window_days, measured_days):
+    table = TYPICAL_ERROR[min(TYPICAL_ERROR, key=lambda w: abs(w - window_days))]
+    got = [e for s_, e in table if s_ <= measured_days]
+    return got[-1] if got else None
 
 
 def channel_view_windows(videos, windows, now=None, measured=None, total_videos=None,
-                         lifetime_views=None, channel_age_days=None, channel=None):
-    """Channel-wide views over several windows from one modelled daily profile, anchored to
-    the daily snapshots when we hold any.
+                         lifetime_views=None, channel_age_days=None, channel=None, retention_days=None):
+    """Channel-wide views over several windows. Measurement comes first:
 
-    `measured` = {"days": span, "views": delta, "per_window": {days: views},
-                  "videos": {video_id: {"days": s, "views": d}}}:
-    the change in the channel's total view count over the newest `span` snapshot days, exact
-    deltas for windows the history already covers, and each upload's own delta.
-    Per window W (days):
-      • covered by snapshots      -> that exact delta ("measured")
-      • uploads measured          -> each upload's measured views + its modelled older part scaled
-                                     by its own measured/modelled ratio, fading over
-                                     TAIL_MEMORY_DAYS; uploads without a measurement use the
-                                     channel-level ratio ("blend")
-      • channel total measured    -> measured span + modelled older part, TAIL scaled by the
-                                     channel-level ratio ("blend")
-      • otherwise                 -> the pure model ("model")
-    Returns {label: {...parts}} keyed like `windows` = [(label, days), ...]."""
+      • the daily snapshots cover the window    -> the exact counter difference ("measured")
+      • PARTIAL_MIN_DAYS+ snapshot days held    -> the measured days + the model for the rest, its
+                                                   TAIL (old uploads' views) scaled by what the
+                                                   measured days say (k = measured minus modelled
+                                                   launches, over the modelled tail) and fading back
+                                                   to the model per tail_memory(); each upload's
+                                                   launch stays as modelled ("partial", or
+                                                   "estimate" when the window is longer than the
+                                                   snapshots may be kept)
+      • fewer snapshot days                     -> the pure model ("estimate")
+
+    `measured` = measured_from_snapshots(...). `retention_days` = how long this channel's
+    snapshots may be kept (YouTube: 30 days for channels we are not authorized for; None = no
+    limit): a window beyond it can never be measured, so it is an estimate for good.
+    Returns {label: {...}} keyed like `windows` = [(label, days), ...]."""
     now = now or datetime.now(timezone.utc)
     horizon = max(d for _, d in windows) if windows else 0
     ctx = catalog_context(videos, channel, now)
     pub = [v for v in videos if v.get("privacy", "public") in (None, "public") and (v.get("views") or 0) > 0]
-    span = int((measured or {}).get("days") or 0)
-    mviews = (measured or {}).get("views")
-    per_window = (measured or {}).get("per_window") or {}
-    mvideos = (measured or {}).get("videos") or {}
-    # per-upload slices once, over the horizon
-    items = []
+    m = measured or {}
+    span = int(m.get("days") or 0)
+    raw = m.get("raw_views", m.get("views"))
+    per_window = m.get("per_window") or {}
     launch, tail = [0.0] * horizon, [0.0] * horizon
-    sample_views = 0
+    n = 0
     for v in pub:
         age = days_since(v.get("published_at"), now)
         if not age:
@@ -445,60 +463,40 @@ def channel_view_windows(videos, windows, now=None, measured=None, total_videos=
         for d in range(horizon):
             launch[d] += l[d]
             tail[d] += t[d]
-        sample_views += v.get("views") or 0
-        m = mvideos.get(v.get("video_id")) or {}
-        ms = int(m.get("days") or 0)
-        mv = m.get("views")
-        items.append((age, v.get("views") or 0, l, t, ms if (mv is not None and ms >= MIN_MEASURED_DAYS and ms <= horizon) else 0, mv))
-    n = len(items)
+        n += 1
     k = None
-    if span >= MIN_MEASURED_DAYS and mviews is not None and span <= horizon:
+    if raw is not None and PARTIAL_MIN_DAYS <= span <= horizon:
         ml, mt = sum(launch[:span]), sum(tail[:span])
-        # the channel-level ratio is only trustworthy when launches are a minority of the span:
-        # a burst week says nothing about the tail (per-upload measurements handle that case)
-        if mt > 0 and ml < 0.5 * float(mviews):
-            k = max(TAIL_K_RANGE[0], min(TAIL_K_RANGE[1], (float(mviews) - ml) / mt))
+        if mt > 0:
+            k = max(TAIL_K_RANGE[0], min(TAIL_K_RANGE[1], (float(raw) - ml) / mt))
     out = {}
     for label, days in windows:
         back = back_catalog_views(videos, days, total_videos, lifetime_views, channel_age_days, now, ctx)
         model = sum(launch[:days]) + sum(tail[:days])
+        beyond = retention_days is not None and days > retention_days
         part = {"days": days, "sample": n, "back_catalog": round(back), "model": round(model + back),
-                "measured_days": span or 0, "tail_k": round(k, 2) if k is not None else None, "videos_measured": 0}
-        if days in per_window and per_window[days] is not None:
-            part.update({"views": round(per_window[days]), "method": "measured", "measured_days": days})
+                "measured_days": span, "tail_k": round(k, 3) if k is not None else None, "beyond_retention": beyond}
+        if per_window.get(days) is not None:
+            gap = (m.get("gaps") or {}).get(days) or 0.0
+            # a reading missing around the window's start (the site was off) = interpolated across the gap
+            part.update({"views": round(per_window[days]), "method": "measured", "exact_in_days": 0,
+                         "typical_error_pct": 0, "gap_days": gap, "interpolated": gap > 1.5})
+        elif k is not None and span < days:
+            mem = tail_memory(days)
+            older = fsum = 0.0
+            for d in range(span, days):
+                f = 1.0 + (k - 1.0) * (1.0 if mem == math.inf else math.exp(-(d - span) / mem))
+                older += launch[d] + tail[d] * f
+                fsum += f
+            # uploads we did not fetch are old = all tail: the same correction over the uncovered days
+            # (their share of the measured days is already inside the measured delta)
+            back_part = back * fsum / days
+            part.update({"views": round(float(raw) + older + back_part), "method": "estimate" if beyond else "partial",
+                         "exact_in_days": None if beyond else days - span,
+                         "typical_error_pct": typical_error(days, span)})
         else:
-            total = 0.0
-            measured_sum = 0.0
-            n_meas = 0
-            for age, views, l, t, ms, mv in items:
-                if age <= days:
-                    total += views                      # published inside the window: exact
-                    if ms:
-                        measured_sum += float(mv)
-                    continue
-                if ms and ms < days:
-                    # this upload's own recent rate vs the model over the same days
-                    model_span = sum(l[:ms]) + sum(t[:ms])
-                    kv = (float(mv) / model_span) if model_span > 0 else 1.0
-                    kv = max(VIDEO_K_RANGE[0], min(VIDEO_K_RANGE[1], kv))
-                    older = 0.0
-                    for d in range(ms, days):
-                        older += (l[d] + t[d]) * (1 + (kv - 1) * _fade(d, ms))
-                    total += float(mv) + older
-                    measured_sum += float(mv)
-                    n_meas += 1
-                elif k is not None and span < days:
-                    # channel-level: the measured delta enters only through the tail ratio (the
-                    # raw delta is lumpy and mixes in launches that are already counted exactly)
-                    older = 0.0
-                    for d in range(span, days):
-                        older += l[d] + t[d] * (1 + (k - 1) * _fade(d, span))
-                    total += sum(l[:span]) + sum(t[:span]) * k + older
-                else:
-                    total += sum(l[:days]) + sum(t[:days])
-            back_part = back * (1 + ((k if k is not None else 1.0) - 1) * 0.5)
-            method = "blend" if (n_meas or (k is not None and span < days)) else "model"
-            part.update({"views": round(total + back_part), "method": method, "videos_measured": n_meas})
+            part.update({"views": round(model + back), "method": "estimate",
+                         "exact_in_days": None if beyond else max(0, days - span), "typical_error_pct": None})
         part["from_uploads"] = part["views"] - part["back_catalog"]
         part["context"] = {"cadence": ctx["cadence"], "plateau_x": {"long": round(ctx["mp"][0], 2), "short": round(ctx["mp"][1], 2)},
                            "evergreen_x": None if ctx.get("dormant") else round(ctx["me_ch"], 2),
@@ -520,48 +518,66 @@ def channel_window_views(videos, days, now=None, outlier_by_id=None, total_video
     return w
 
 
-def _interp_day(pts, target):
-    """Linear interpolation of a (day, value) series at `target` (a datetime)."""
+def _snap_time(r):
+    """When a snapshot's counter was read: its fetch time when recorded, else the start of its day."""
+    ts = r.get("fetched_at")
+    if ts:
+        try:
+            return datetime.fromtimestamp(float(ts), tz=timezone.utc).replace(tzinfo=None)
+        except Exception:
+            pass
+    return datetime.strptime(r["day"], "%Y-%m-%d")
+
+
+def _interp_at(pts, target):
+    """Linear interpolation of a (datetime, value) series at `target`."""
     before = max((p for p in pts if p[0] <= target), key=lambda p: p[0])
     after = min((p for p in pts if p[0] >= target), key=lambda p: p[0])
     if after[0] == before[0]:
         return before[1]
-    frac = (target - before[0]).days / (after[0] - before[0]).days
+    frac = (target - before[0]).total_seconds() / (after[0] - before[0]).total_seconds()
     return before[1] + (after[1] - before[1]) * frac
 
 
 def measured_from_snapshots(rows, windows):
-    """Turn daily channel-total snapshots [{day, views}...] (oldest first) into the `measured`
-    argument of channel_view_windows: the delta over the whole span we hold, plus exact deltas
-    (linearly interpolated between the two neighbouring snapshot days) for each window the
-    history already covers. None when fewer than two days exist."""
+    """Daily channel-total snapshots [{day, views, fetched_at?}...] -> the `measured` argument of
+    channel_view_windows: the counter's change over the whole history we hold (raw_views, over
+    `days`), a trimmed per-day rate, and the EXACT change for every window the history covers
+    (interpolated between the two neighbouring readings, at the moments they were read).
+    None when fewer than two readings exist."""
     pts = []
     for r in rows or []:
         if r.get("views") is None or not r.get("day"):
             continue
         try:
-            pts.append((datetime.strptime(r["day"], "%Y-%m-%d"), int(r["views"])))
+            pts.append((_snap_time(r), int(r["views"])))
         except Exception:
             continue
     pts.sort()
     if len(pts) < 2:
         return None
-    latest_day, latest_views = pts[-1]
-    span = (latest_day - pts[0][0]).days
-    if span <= 0:
+    first_t, first_v = pts[0]
+    latest_t, latest_views = pts[-1]
+    span_f = (latest_t - first_t).total_seconds() / 86400
+    if span_f <= 0:
         return None
-    per_window = {}
+    raw = max(0, latest_views - first_v)
+    per_window, gaps = {}, {}
     for _, days in windows:
-        target = latest_day - timedelta(days=days)
-        if target < pts[0][0]:
-            continue
-        per_window[days] = max(0.0, latest_views - _interp_day(pts, target))
-    raw = max(0, latest_views - pts[0][1])
-    # The Data API's channel total updates in lumps (a 300K jump on one day, a crawl the next),
-    # so the RATE used to calibrate the model's tail is trimmed: with 3+ intervals, an interval
-    # whose per-day rate is over 3x the median of the others is dropped and the span re-scaled.
+        target = latest_t - timedelta(days=days)
+        if target >= first_t:
+            per_window[days] = max(0.0, latest_views - _interp_at(pts, target))
+            before = max(p[0] for p in pts if p[0] <= target)
+            after = min(p[0] for p in pts if p[0] >= target)
+            gaps[days] = round((after - before).total_seconds() / 86400, 1)   # days between the readings around the window's start
+        elif (first_t - target).total_seconds() / 86400 <= COVER_SLACK_DAYS:
+            per_window[days] = max(0.0, raw / span_f * days)      # a few hours short: the measured rate
+            gaps[days] = 0.0
+    # The channel total updates in lumps (a 300K jump one day, a crawl the next), so the RATE is
+    # trimmed: with 3+ intervals, one whose per-day rate is over 3x the median of the others is
+    # dropped and the span re-scaled. (The window deltas above stay exact.)
     views, trimmed = raw, False
-    ivs = [((pts[i][0] - pts[i - 1][0]).days, pts[i][1] - pts[i - 1][1]) for i in range(1, len(pts))]
+    ivs = [((pts[i][0] - pts[i - 1][0]).total_seconds() / 86400, pts[i][1] - pts[i - 1][1]) for i in range(1, len(pts))]
     ivs = [(d, v) for d, v in ivs if d > 0]
     if len(ivs) >= 3:
         rates = [v / d for d, v in ivs]
@@ -572,9 +588,10 @@ def measured_from_snapshots(rows, windows):
             rest_days = sum(d for i, (d, v) in enumerate(ivs) if i != hi)
             rest_views = sum(v for i, (d, v) in enumerate(ivs) if i != hi)
             if rest_days > 0:
-                views, trimmed = max(0.0, rest_views / rest_days * span), True
-    return {"days": span, "views": views, "raw_views": raw, "trimmed": trimmed,
-            "since": pts[0][0].strftime("%Y-%m-%d"), "per_window": per_window}
+                views, trimmed = max(0.0, rest_views / rest_days * span_f), True
+    return {"days": int(round(span_f)), "span_days": round(span_f, 2), "views": views, "raw_views": raw,
+            "trimmed": trimmed, "rate": views / span_f, "since": first_t.strftime("%Y-%m-%d"), "per_window": per_window,
+            "gaps": gaps}
 
 
 def measured_videos_from_snapshots(rows, latest_day=None, max_days=120):

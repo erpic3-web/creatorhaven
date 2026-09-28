@@ -141,7 +141,8 @@ def sync_channel(store, cfg, channel, tokens, api_base=api_youtube.API_BASE,
         an = api_analytics.Analytics(access, base=analytics_base)
         monetary = oauth.has_scope(scopes, oauth.SCOPE_MONETARY)
         try:
-            rows = an.daily(days=int(cfg.get("analytics_days") or 90), monetary=monetary)
+            # a full year, so the Search page shows this channel's exact 6-month / 1-year views too
+            rows = an.daily(days=max(365, int(cfg.get("analytics_days") or 90)), monetary=monetary)
             store.upsert_daily(cid, rows)
             summary["daily"] = len(rows)
             top = an.top_videos(days=28)

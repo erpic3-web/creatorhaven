@@ -34,6 +34,8 @@ def _ensure_tables(store):
         channel_id TEXT NOT NULL, video_id TEXT NOT NULL, day TEXT NOT NULL, views INTEGER,
         PRIMARY KEY (video_id, day))""")
     store._exec("CREATE INDEX IF NOT EXISTS video_snapshots_ch ON video_snapshots (channel_id, day)")
+    # channels someone looked up: the daily job keeps snapshotting them for FOLLOW_DAYS after that
+    store._exec("CREATE TABLE IF NOT EXISTS followed_channels (channel_id TEXT PRIMARY KEY, last_lookup REAL)")
 
 
 def _today():
@@ -76,8 +78,88 @@ def video_snapshot_deltas(store, channel_id, max_days=120):
 
 def snapshots(store, channel_id, days=90):
     _ensure_tables(store)
-    return store._all("SELECT day, subscribers, views, videos FROM channel_snapshots WHERE channel_id=? "
+    return store._all("SELECT day, subscribers, views, videos, fetched_at FROM channel_snapshots WHERE channel_id=? "
                       "ORDER BY day DESC LIMIT ?", (channel_id, days))[::-1]
+
+
+# ---------------------------------------------------------------- following + YouTube's 30-day rule
+# YouTube API policy III.E.4.b/d: statistics of a channel that did not authorize us (anyone's public
+# counters) may be stored for at most 30 days; Analytics data and statistics of a channel whose owner
+# linked it may be kept. Audited apps can apply for 36 months (III.L, "derived metrics and data
+# storage") - set STATS_RETENTION_DAYS when that is granted.
+RETENTION_DAYS = 30
+FOLLOW_DAYS = 30          # a looked-up channel gets a daily snapshot for this long after the lookup
+
+
+def authorized_ids(store):
+    return {r["channel_id"] for r in store._all(
+        "SELECT channel_id FROM channels WHERE refresh_token IS NOT NULL AND refresh_token != ''")}
+
+
+def is_authorized(store, channel_id):
+    return channel_id in authorized_ids(store)
+
+
+def follow(store, channel_id):
+    if not channel_id:
+        return
+    _ensure_tables(store)
+    store._exec("INSERT OR REPLACE INTO followed_channels VALUES (?,?)", (channel_id, time.time()))
+
+
+def followed_ids(store, follow_days=None):
+    """Every tracked channel (all accounts) + every channel looked up within FOLLOW_DAYS."""
+    _ensure_tables(store)
+    since = time.time() - (follow_days or FOLLOW_DAYS) * 86400
+    ids = {c["channel_id"] for c in store.all_channels()}
+    ids |= {r["channel_id"] for r in store._all("SELECT channel_id FROM followed_channels WHERE last_lookup >= ?", (since,))}
+    return sorted(i for i in ids if i)
+
+
+def snapshot_followed(store, yt, follow_days=None):
+    """The daily reading of every followed channel's public counters (channels.list, 50 per unit)."""
+    ids = followed_ids(store, follow_days)
+    got = 0
+    for i in range(0, len(ids), 50):
+        for ch in yt.channels_by_ids(ids[i:i + 50]):
+            record_snapshot(store, ch.get("channel_id"), ch)
+            got += 1
+    return {"channels": len(ids), "snapshots": got, "units": (len(ids) + 49) // 50}
+
+
+def purge_unauthorized_stats(store, keep_days=None):
+    """Delete the daily counters of channels that did not authorize us once they are older than
+    keep_days (default RETENTION_DAYS), and forget follows that ended."""
+    _ensure_tables(store)
+    keep = int(keep_days or RETENTION_DAYS)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=keep)).strftime("%Y-%m-%d")
+    auth = "SELECT channel_id FROM channels WHERE refresh_token IS NOT NULL AND refresh_token != ''"
+    out = {}
+    for table in ("channel_snapshots", "video_snapshots"):
+        n = store._one(f"SELECT COUNT(*) AS n FROM {table} WHERE day < ? AND channel_id NOT IN ({auth})", (cutoff,))["n"]
+        if n:
+            store._exec(f"DELETE FROM {table} WHERE day < ? AND channel_id NOT IN ({auth})", (cutoff,))
+        out[table] = n
+    store._exec("DELETE FROM followed_channels WHERE last_lookup < ?", (time.time() - keep * 86400,))
+    return out
+
+
+def purge_stale_caches(store, keep_days=None):
+    """Cached search / lookup / badge-baseline results hold other channels' data too: drop the
+    ones older than the retention window (they are only ever served within a day anyway)."""
+    keep = int(keep_days or RETENTION_DAYS)
+    limit = time.time() - keep * 86400
+    dead = []
+    for r in store._all("SELECT key, value FROM settings WHERE key LIKE 'lookup:%' OR key LIKE 'search:%' OR key LIKE 'baseline:%'"):
+        try:
+            ts = (json.loads(r["value"]) or {}).get("ts", 0)
+            if isinstance(ts, (int, float)) and ts < limit:
+                dead.append(r["key"])
+        except Exception:
+            continue
+    for k in dead:
+        store._exec("DELETE FROM settings WHERE key=?", (k,))
+    return len(dead)
 
 
 def _cache_get(store, key, ttl):
@@ -179,6 +261,7 @@ def lookup_channel(store, yt, channel_id, n_videos=30, force=False):
     if not force:
         cached = _cache_get(store, key, LOOKUP_TTL)
         if cached is not None:
+            follow(store, channel_id)
             cached["growth"] = growth(store, channel_id)
             cached["windows"] = _view_windows((cached.get("videos") or []) + (cached.get("catalog") or []),
                                               cached.get("channel") or {}, store, channel_id)
@@ -238,6 +321,7 @@ def lookup_channel(store, yt, channel_id, n_videos=30, force=False):
     }
     top = sorted(videos, key=lambda v: v.get("views") or 0, reverse=True)[:5]
     record_snapshot(store, channel_id, ch)
+    follow(store, channel_id)
     try:
         record_video_snapshots(store, channel_id, videos + catalog)
     except Exception:
@@ -251,41 +335,72 @@ def lookup_channel(store, yt, channel_id, n_videos=30, force=False):
     return data
 
 
-# period selector: channel-wide view estimates (residual decay model) over each window
-_WINDOWS = (("28d", 28), ("3mo", 91), ("6mo", 182), ("1yr", 365))
+# period selector: channel-wide views over each window
+_WINDOWS = (("7d", 7), ("28d", 28), ("3mo", 91), ("6mo", 182), ("1yr", 365))
+
+
+def analytics_windows(store, channel_id, windows=_WINDOWS):
+    """Exact views per window from the YouTube Analytics daily rows a linked channel syncs (the same
+    numbers as Studio). Only windows whose every day is present; YouTube lags about 2 days."""
+    try:
+        rows = store._all("SELECT day, views FROM daily WHERE channel_id=? ORDER BY day DESC LIMIT 400", (channel_id,))
+    except Exception:
+        return {}
+    have = {r["day"]: r["views"] for r in rows if r.get("views") is not None}
+    if not have:
+        return {}
+    latest = max(have)
+    end = datetime.strptime(latest, "%Y-%m-%d")
+    out = {}
+    for label, days in windows:
+        need = [(end - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)]
+        if all(d in have for d in need):
+            out[label] = {"views": int(sum(have[d] for d in need)), "through": latest}
+    return out
 
 
 def _view_windows(videos, ch, store=None, channel_id=None):
-    """'Views in the last N' for a public channel: every fetched upload's modelled window slice
-    (metrics.channel_view_windows), anchored to the daily channel-total snapshots we hold —
-    a window the snapshots already cover is MEASURED, a partly covered one blends the measured
-    days with a tail-calibrated model, and a fresh channel gets the pure model ('est')."""
+    """'Views in the last N' for any channel, most exact source first:
+      • a channel whose owner linked it   -> YouTube Analytics, the same numbers as Studio
+      • daily snapshots cover the window  -> the exact counter difference
+      • some snapshot days                -> measured days + a corrected model ("partial"/"estimate")
+      • none yet                          -> the model ("estimate")
+    Windows longer than the snapshots may be kept (RETENTION_DAYS, YouTube's 30-day rule for
+    channels that did not authorize us) stay estimates for good."""
     now = datetime.now(timezone.utc)
     total_videos = ch.get("videos")
     lifetime_views = ch.get("views")
     created = _parse_ts(ch.get("published_at") or "")
     channel_age_days = (now - created).days if created else None
-    measured = None
+    measured, authorized = None, False
     if store is not None and channel_id:
         try:
             measured = metrics.measured_from_snapshots(snapshots(store, channel_id, 800), _WINDOWS)
-            per_video = video_snapshot_deltas(store, channel_id)
-            if per_video:
-                measured = measured or {"days": 0, "views": None, "per_window": {}}
-                measured["videos"] = per_video
         except Exception:
             measured = None
+        try:
+            authorized = is_authorized(store, channel_id)
+        except Exception:
+            authorized = False
     res = metrics.channel_view_windows(videos, _WINDOWS, now=now, measured=measured, total_videos=total_videos,
-                                       lifetime_views=lifetime_views, channel_age_days=channel_age_days, channel=ch)
+                                       lifetime_views=lifetime_views, channel_age_days=channel_age_days, channel=ch,
+                                       retention_days=None if authorized else RETENTION_DAYS)
+    an = analytics_windows(store, channel_id) if (authorized and store is not None) else {}
     out = {}
     for label, d in _WINDOWS:
         est = res[label]
-        out[label] = {"days": d, "views": est["views"], "from_uploads": est.get("from_uploads"),
-                      "back_catalog": est.get("back_catalog", 0), "model": est.get("model"),
-                      "method": est.get("method"), "measured_days": est.get("measured_days"),
-                      "measured_since": (measured or {}).get("since"), "tail_k": est.get("tail_k"),
-                      "videos_measured": est.get("videos_measured", 0), "context": est.get("context"),
-                      "max_outlier": None, "sample": est["sample"]}
+        row = {"days": d, "views": est["views"], "from_uploads": est.get("from_uploads"),
+               "back_catalog": est.get("back_catalog", 0), "model": est.get("model"),
+               "method": est.get("method"), "measured_days": est.get("measured_days"),
+               "measured_since": (measured or {}).get("since"), "tail_k": est.get("tail_k"),
+               "exact_in_days": est.get("exact_in_days"), "typical_error_pct": est.get("typical_error_pct"),
+               "beyond_retention": est.get("beyond_retention"), "retention_days": None if authorized else RETENTION_DAYS,
+               "gap_days": est.get("gap_days"), "interpolated": bool(est.get("interpolated")),
+               "context": est.get("context"), "max_outlier": None, "sample": est["sample"]}
+        if label in an:
+            row.update({"views": an[label]["views"], "method": "analytics", "through": an[label]["through"],
+                        "exact_in_days": 0, "typical_error_pct": 0})
+        out[label] = row
     out["lifetime"] = {"days": 0, "views": ch.get("views"), "boost": 0, "method": "measured",
                        "max_outlier": None, "sample": len(videos)}
     return out
