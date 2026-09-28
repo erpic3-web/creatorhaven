@@ -128,7 +128,7 @@ class Mock(BaseHTTPRequestHandler):
             return self._send({"error": "invalid_grant"}, 400)
         if u.path == "/gsi/token":            # "log in with Google" token exchange
             payload = base64.urlsafe_b64encode(json.dumps(
-                {"sub": "g-123", "email": "guser@gmail.com", "name": "G User",
+                {"sub": "g-123", "email": "guser@gmail.com", "email_verified": True, "name": "G User",
                  "picture": "https://x/pic.png"}).encode()).rstrip(b"=").decode()
             jwt = "eyJ.".rstrip(".") + "." + payload + ".sig"
             return self._send({"id_token": jwt, "access_token": "gat"})
@@ -199,8 +199,10 @@ class Mock(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
         if u.path == "/discord/me":
+            if STATE.get("discord_unverified"):     # someone else's address, never verified
+                return self._send({"id": "d-888", "username": "sneaky", "email": "bob@x.com", "verified": False})
             return self._send({"id": "d-777", "username": "erikd", "global_name": "Erik D",
-                               "email": "erikd@discord.test", "avatar": "abcavatar"})
+                               "email": "erikd@discord.test", "avatar": "abcavatar", "verified": True})
         q = dict(urllib.parse.parse_qsl(u.query))
         auth = self.headers.get("Authorization", "")
         STATE["calls"].append(("GET", u.path, auth))
@@ -615,6 +617,15 @@ def main():
     du = cd.get("/api/auth/me").get_json()["user"]
     check("discord account created + isolated", du and du["email"] == "erikd@discord.test" and du["id"] == 4)
     check("users database tracks every signup", store.user_count() == 4)
+    STATE["discord_unverified"] = True
+    cx = application.test_client()
+    loc = cx.get("/auth/discord").headers["Location"]
+    xstate = urllib.parse.parse_qs(urllib.parse.urlparse(loc).query)["state"][0]
+    r = cx.get(f"/auth/discord/cb?code=good&state={xstate}")
+    STATE["discord_unverified"] = False
+    check("an unverified sign-in address cannot open the account with that email",
+          "auth_error" in r.headers.get("Location", "") and cx.get("/api/auth/me").get_json()["user"] is None
+          and not store.user_by_provider("discord", "d-888") and store.user_count() == 4)
     check("owner-only settings guard blocks non-owner", c2.post("/api/settings", json={"sync_minutes": 5}).status_code == 403)
     # re-auth the owner client for the remaining tests (its session is unchanged, but assert it)
     check("owner session intact", c.get("/api/auth/me").get_json()["user"]["id"] == 1)
@@ -705,6 +716,14 @@ def main():
     anon = application.test_client()
     r = anon.get("/privacy")
     check("the privacy policy is public", r.status_code == 200 and b"privacy policy" in r.data and b"never sent" in r.data)
+    cfg["owner_email"], cfg["contact_email"] = "bob@x.com", "hello@creatorhaven.test"
+    bob_status = c2.get("/api/status").get_json()
+    r = anon.get("/privacy")
+    cfg["owner_email"], cfg["contact_email"] = "", ""
+    check("an account whose email equals OWNER_EMAIL is not an owner (only account 1 is)",
+          bob_status["is_owner"] is False and bob_status["role"] != "owner")
+    check("/privacy shows CONTACT_EMAIL and never the owner's address",
+          b"hello@creatorhaven.test" in r.data and b"bob@x.com" not in r.data)
     check("the owner can't delete the owner account", c.delete("/api/account", json={"confirm": "DELETE"}).status_code == 400)
     check("deleting needs the typed confirmation", c5.delete("/api/account", json={"confirm": "yes"}).status_code == 400)
     eve_key = c5.get("/api/status").get_json().get("ext_token")
@@ -996,6 +1015,40 @@ def main():
     c.delete("/api/channels/UCimported0000000000000001")
     check("channel delete", store.channel("UCimported0000000000000001") is None and not store.videos("UCimported0000000000000001"))
     check("no internet reached", all(("127.0.0.1" in x[1]) or x[1].startswith("/") for x in STATE["calls"]))
+
+    # ------------------------------------------- hosted owner account (public site)
+    import copy as _copy
+    tmp_h = Path(tempfile.mkdtemp())
+    cfg_h = _copy.deepcopy(cfg)
+    cfg_h.update({"base_url": "https://creatorhaven.example.com", "database": str(tmp_h / "h.sqlite3"),
+                  "owner_email": "Owner@Site.com", "owner_password": "", "sync_minutes": 0})
+    store_h = Store(cfg_h["database"])
+    ch = app_module.create_app(cfg_h, store_h, bases).test_client()
+    r = ch.post("/api/auth/signup", json={"email": "owner@site.com", "password": "stranger123", "name": "x"})
+    check("hosted: signing up with OWNER_EMAIL cannot claim the owner", r.status_code == 403 and store_h.owner_unclaimed())
+    r = ch.post("/api/auth/signup", json={"email": "first@x.com", "password": "firstpass1", "name": "F"}).get_json()
+    check("hosted: the first signup is not the owner",
+          r["ok"] and r["user"]["id"] != 1 and ch.get("/api/status").get_json()["is_owner"] is False)
+    cfg_h0 = dict(cfg_h, database=str(tmp_h / "h0.sqlite3"), owner_email="")
+    ch0 = app_module.create_app(cfg_h0, Store(cfg_h0["database"]), bases).test_client()
+    r = ch0.post("/api/auth/signup", json={"email": "anyone@x.com", "password": "anyonepass1", "name": "A"}).get_json()
+    check("hosted without OWNER_EMAIL: nobody becomes the owner by signing up", r["ok"] and r["user"]["id"] != 1)
+    cfg_h2 = dict(cfg_h, database=str(tmp_h / "h2.sqlite3"), owner_password="correct horse battery")
+    store_h2 = Store(cfg_h2["database"])
+    ch2 = app_module.create_app(cfg_h2, store_h2, bases).test_client()
+    check("hosted: OWNER_PASSWORD creates the owner account at boot",
+          (store_h2.get_user(1) or {}).get("email") == "owner@site.com" and not store_h2.owner_unclaimed())
+    check("hosted: nobody can sign up with the owner's address",
+          ch2.post("/api/auth/signup", json={"email": "OWNER@site.com", "password": "stranger123", "name": "x"}).status_code == 409)
+    r = ch2.post("/api/auth/login", json={"email": "owner@site.com", "password": "correct horse battery"}).get_json()
+    st = ch2.get("/api/status").get_json()
+    check("hosted: the owner signs in with OWNER_PASSWORD and gets an extension key",
+          r["ok"] and st["is_owner"] is True and st["user"]["id"] == 1 and bool(st.get("ext_token")))
+    cfg_h3 = dict(cfg_h2, owner_password="a brand new pass")
+    ch3 = app_module.create_app(cfg_h3, store_h2, bases).test_client()
+    ok_new = ch3.post("/api/auth/login", json={"email": "owner@site.com", "password": "a brand new pass"}).status_code == 200
+    ok_old = ch3.post("/api/auth/login", json={"email": "owner@site.com", "password": "correct horse battery"}).status_code == 200
+    check("hosted: a changed OWNER_PASSWORD resets the owner's password on the next boot", ok_new and not ok_old)
 
     srv.shutdown()
     n_ok = sum(1 for _, ok in CHECKS if ok)
