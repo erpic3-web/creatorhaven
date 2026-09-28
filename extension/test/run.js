@@ -581,6 +581,17 @@ t('latest video card: probe reads Studio’s card + asks for engaged views and a
   assert.equal(SF.SF_DEFAULTS.studioLatestPlus, true);
   assert.equal(SF.SF_DEFAULTS.studioProbeCapture, false);
 });
+t('latest card rows (real Studio 2026-09-28): hidden tooltips never get our value, the "i" explainer never hides a row, Shorts card too', () => {
+  const feat = read('content/studio_features.js');
+  const hidden = (feat.match(/const NOT_SHOWN = '([^']+)'/) || [])[1] || '';
+  for (const s of ['ytcp-paper-tooltip', '[role="tooltip"]', '.sf-sf-info']) assert.ok(hidden.includes(s), 'NOT_SHOWN must cover ' + s);
+  const put = feat.slice(feat.indexOf('function putRow'), feat.indexOf('function renderLatest'));
+  assert.ok(/NOT_SHOWN\)\.forEach\(\(n\) => n\.remove\(\)\)/.test(put), 'the clone must drop tooltips and our "i"');
+  assert.ok(/removeAttribute\('id'\)/.test(put), 'the clone must not duplicate Studio ids');
+  assert.ok(/shownLeaves\(row\)/.test(put) && !/const leaves = textLeaves\(row\)/.test(put), 'label/value go into VISIBLE text only');
+  assert.ok(/valueRe\.test\(plainText\(n\)\)/.test(feat), 'row matching ignores the explainer "i" and tooltip text');
+  assert.ok(/latest \(video\|short\) performance/.test(feat) && /yta-entity-snapshot/.test(feat), 'Shorts card + language-free fallback');
+});
 t('outlier badges: throttled scan, parallel small batches, failures are retried not cached', () => {
   const src = read('content/outlier.js');
   assert.ok(/BATCH = 12, PARALLEL = 3/.test(src));
