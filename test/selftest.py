@@ -423,7 +423,7 @@ def main():
     _w = metrics.channel_view_windows(_cat, [("28d", 28), ("1yr", 365)], now=_now)
     _ctx = metrics.catalog_context(_cat, None, _now)
     check("channel windows = sum of per-upload slices (model)",
-          _w["28d"]["method"] == "model" and abs(_w["28d"]["views"] - sum(metrics.video_window_views(10000, a, 28, ctx=_ctx) for a in (5, 40, 100, 400, 1500))) <= 1
+          _w["28d"]["method"] == "estimate" and abs(_w["28d"]["views"] - sum(metrics.video_window_views(10000, a, 28, ctx=_ctx) for a in (5, 40, 100, 400, 1500))) <= 1
           and _w["1yr"]["views"] > _w["28d"]["views"] and _w["28d"]["sample"] == 5)
     _rows = [{"day": (_now - _td(days=d)).strftime("%Y-%m-%d"), "views": 1000000 - d * 10000} for d in (0, 1, 2, 3, 5, 8)]
     _m = metrics.measured_from_snapshots(_rows, [("28d", 28), ("7d", 7)])
@@ -457,10 +457,36 @@ def main():
     store.add_alert({"key": "stock:UCstock:2026-09-09", "kind": "low_stock", "channel_id": "UCstock", "title": "Stock: only 0 scheduled"})
     check("start-up cleanup dismisses the blind 'only 0 scheduled' alerts",
           alerts.retire_blind_stock_alerts(store) == 1 and not any(a["kind"] == "low_stock" for a in store.alerts()))
-    _burst = metrics.channel_view_windows(_cat, [("28d", 28)], now=_now, measured=dict(_m, views=12000, per_window={}))
-    check("a burst week (launches over half the measured span) does not calibrate the tail", _burst["28d"]["method"] == "model" and _burst["28d"]["tail_k"] is None)
-    check("a longer window blends the measured span with a tail-calibrated model",
-          _wb["28d"]["method"] == "blend" and _wb["28d"]["tail_k"] is not None and _wb["28d"]["views"] >= 8000)
+    # measurement wins: when the counter says the old uploads are dead, the window follows it (Chica:
+    # the model said 3.3M for 28 days, the counter 741K)
+    _dead = metrics.channel_view_windows(_cat, [("28d", 28)], now=_now, measured=dict(_m, raw_views=2000, views=2000, per_window={}))
+    check("measurement beats the model: a near-dead tail pulls the window far under the model",
+          _dead["28d"]["method"] == "partial" and _dead["28d"]["views"] < 0.5 * _dead["28d"]["model"] and _dead["28d"]["tail_k"] <= 0.1)
+    check("a partly measured window is the measured days + the corrected model, exact in (window - days)",
+          _wb["28d"]["method"] == "partial" and _wb["28d"]["tail_k"] is not None and _wb["28d"]["views"] >= 80000
+          and _wb["28d"]["exact_in_days"] == 20 and _wb["28d"]["typical_error_pct"] == 14)
+    _wr = metrics.channel_view_windows(_cat, [("28d", 28), ("3mo", 91)], now=_now, measured=_m, retention_days=30)
+    check("a window longer than the snapshots may be kept stays an estimate for good (YouTube's 30-day rule)",
+          _wr["3mo"]["method"] == "estimate" and _wr["3mo"]["exact_in_days"] is None and _wr["3mo"]["beyond_retention"]
+          and _wr["28d"]["method"] == "partial" and _wr["28d"]["exact_in_days"] == 20)
+    _w2 = metrics.channel_view_windows(_cat, [("28d", 28)], now=_now, measured=dict(_m, days=2, raw_views=20000, per_window={}))
+    check("under 3 days of readings: the pure model, labelled an estimate", _w2["28d"]["method"] == "estimate" and _w2["28d"]["tail_k"] is None)
+    check("the 1-year window lets the correction fade (bursts live in the uploads' ages), 3/6 months keep it",
+          metrics.tail_memory(365) == 60 and metrics.tail_memory(91) == float("inf") and metrics.tail_memory(182) == float("inf"))
+    # readings carry the moment they were taken: windows are cut at those moments
+    _t0 = _now.timestamp()
+    _ts = [{"day": (_now - _td(days=d)).strftime("%Y-%m-%d"), "views": 1000000 - 10000 * d, "fetched_at": _t0 - d * 86400 - (0 if d == 0 else 6 * 3600)} for d in (0, 1, 2, 3, 4, 5, 6, 7, 8)]
+    _mt = metrics.measured_from_snapshots(_ts, [("7d", 7)])
+    # the 7-day start falls 6 h after the reading taken 7 days + 6 h ago: 930,000 + 0.25 x 10,000
+    # (day labels alone would say 70,000)
+    check("snapshot times (not just days) place the window start", abs(_mt["per_window"][7] - 67500) < 1)
+    _gap = metrics.measured_from_snapshots([{"day": (_now - _td(days=d)).strftime("%Y-%m-%d"), "views": 1000000 - 10000 * d} for d in (0, 1, 10, 11, 12)], [("7d", 7)])
+    _wg = metrics.channel_view_windows(_cat, [("7d", 7)], now=_now, measured=_gap)
+    check("a window whose start falls in a gap between readings is marked interpolated",
+          _wg["7d"]["method"] == "measured" and _wg["7d"]["interpolated"] and _wg["7d"]["gap_days"] == 9.0)
+    _wn = metrics.channel_view_windows(_cat, [("7d", 7)], now=_now, measured=metrics.measured_from_snapshots(
+        [{"day": (_now - _td(days=d)).strftime("%Y-%m-%d"), "views": 1000000 - 10000 * d} for d in range(9)], [("7d", 7)]))
+    check("...and one read every day is exact", _wn["7d"]["method"] == "measured" and not _wn["7d"]["interpolated"])
     _cwv = metrics.channel_window_views(_cat, 28, now=_now, total_videos=40, lifetime_views=10_000_000, channel_age_days=3000)
     check("channel_window_views returns parts", "views" in _cwv and _cwv["views"] > 0 and "boost" in _cwv and _cwv["back_catalog"] > 0)
     _vrows = [{"video_id": "c2", "day": (_now - _td(days=d)).strftime("%Y-%m-%d"), "views": 9000 + d * 10} for d in (0, 4, 8)] \
@@ -469,11 +495,9 @@ def main():
     _mv = metrics.measured_videos_from_snapshots(_vrows, _now.strftime("%Y-%m-%d"))
     check("per-upload snapshots -> deltas only for uploads seen on the latest day with history",
           set(_mv) == {"c2"} and _mv["c2"]["days"] == 8 and _mv["c2"]["views"] == 0)
-    _m3 = dict(_m, videos={"c2": {"days": 8, "views": 600}, "c3": {"days": 8, "views": 0}})
-    _wv = metrics.channel_view_windows(_cat, [("28d", 28), ("1yr", 365)], now=_now, measured=_m3)
-    _wv0 = metrics.channel_view_windows(_cat, [("28d", 28), ("1yr", 365)], now=_now, measured=dict(_m, videos={"c2": {"days": 8, "views": 50}, "c3": {"days": 8, "views": 0}}))
-    check("uploads with their own measured rate are anchored individually (a hotter upload lifts the window)",
-          _wv["28d"]["method"] == "blend" and _wv["28d"]["videos_measured"] == 2 and _wv["28d"]["views"] > _wv0["28d"]["views"] > 0)
+    _wv = metrics.channel_view_windows(_cat, [("28d", 28)], now=_now, measured=dict(_m, videos={"c2": {"days": 8, "views": 600}}))
+    check("the channel counter is the measurement (per-upload deltas do not move the window)",
+          _wv["28d"]["views"] == _wb["28d"]["views"])
     search_mod.record_video_snapshots(store, "UCsnaptest", [{"video_id": "s1", "views": 100}, {"video_id": "s2", "views": 5}, {"video_id": "s3"}])
     check("per-upload snapshots recorded on lookup/sync (one row per upload per day)",
           store._one("SELECT COUNT(*) AS n FROM video_snapshots WHERE channel_id='UCsnaptest'")["n"] == 2 and search_mod.video_snapshot_deltas(store, "UCsnaptest") == {})
@@ -537,10 +561,10 @@ def main():
     by = {x["channel_id"]: x for x in r}
     t = by["UCtest000000000000000001"]
     check("sync pulls videos", t["videos"] == 49, str(t))
-    check("sync pulls analytics daily", t["daily"] == 30 and t["analytics"] == "ok", str(t["errors"]))
+    check("sync pulls a year of analytics daily (exact 6-month / 1-year windows on the Search page)", t["daily"] == 365 and t["analytics"] == "ok", str(t["errors"]))
     check("imported channel lacks analytics scope", by["UCimported0000000000000001"]["analytics"] == "needs_scope" and by["UCimported0000000000000001"]["videos"] == 49)
     d = store.daily("UCtest000000000000000001", "2000-01-01", "2999-01-01")
-    check("daily rows carry engaged views", len(d) == 30 and d[0]["engaged_views"] == 800 and d[0]["revenue"] == 12.5)
+    check("daily rows carry engaged views", len(d) == 365 and d[0]["engaged_views"] == 800 and d[0]["revenue"] == 12.5)
     check("first scan is baseline (no alert flood)", t["alerts"] == 0 or all(a["kind"] == "scheduled_no_description" for a in store.alerts()), str([a["kind"] for a in store.alerts()]))
     check("scheduled-without-description alert", any(a["kind"] == "scheduled_no_description" for a in store.alerts()))
     q = store.quota(sync.today())
@@ -577,7 +601,7 @@ def main():
     STATE["analytics_403"] = None
     STATE["engaged_400"] = True
     r = c.post("/api/sync/now", json={"channel_id": "UCtest000000000000000001"}).get_json()["result"][0]
-    check("engagedViews 400 falls back to views", r["analytics"] == "ok" and r["daily"] == 30, str(r["errors"]))
+    check("engagedViews 400 falls back to views", r["analytics"] == "ok" and r["daily"] == 365, str(r["errors"]))
     STATE["engaged_400"] = False
 
     # ------------------------------------------ multi-user isolation + OAuth sign-in
@@ -1049,6 +1073,54 @@ def main():
     ok_new = ch3.post("/api/auth/login", json={"email": "owner@site.com", "password": "a brand new pass"}).status_code == 200
     ok_old = ch3.post("/api/auth/login", json={"email": "owner@site.com", "password": "correct horse battery"}).status_code == 200
     check("hosted: a changed OWNER_PASSWORD resets the owner's password on the next boot", ok_new and not ok_old)
+
+    # ------------------------------------ exact windows, the daily job, YouTube's 30-day rule
+    import sf.search as _sm
+    _today_s = _sm._today()
+    _day = lambda n: (__import__("datetime").datetime.strptime(_today_s, "%Y-%m-%d") - _td(days=n)).strftime("%Y-%m-%d")
+    _linked = next((ch for ch in store.all_channels() if ch.get("refresh_token")), None)
+    _linked_id = _linked["channel_id"] if _linked else "UCnone"
+    for _cid in ("UCpublicold00000000000001", _linked_id):
+        for _n in (40, 31, 29, 1):
+            store._exec("INSERT OR REPLACE INTO channel_snapshots VALUES (?,?,?,?,?,?)", (_cid, _day(_n), 1, 1000 - _n, 1, 0))
+    store._exec("INSERT OR REPLACE INTO video_snapshots VALUES ('UCpublicold00000000000001','vOld',?,5)", (_day(45),))
+    _pg = _sm.purge_unauthorized_stats(store)
+    _left_pub = [r["day"] for r in store._all("SELECT day FROM channel_snapshots WHERE channel_id='UCpublicold00000000000001' ORDER BY day")]
+    _left_own = store._one("SELECT COUNT(*) AS n FROM channel_snapshots WHERE channel_id=? AND day IN (?,?)", (_linked_id, _day(40), _day(31)))["n"]
+    check("30-day rule: other channels' counters older than 30 days are deleted, recent ones kept",
+          _left_pub == [_day(29), _day(1)] and _pg["channel_snapshots"] >= 2 and _pg["video_snapshots"] >= 1)
+    check("...a channel whose owner linked it keeps its history", _linked is not None and _left_own == 2)
+    store.set_setting("lookup:UCstale:30", {"ts": time.time() - 40 * 86400, "data": {}})
+    store.set_setting("lookup:UCfresh:30", {"ts": time.time(), "data": {}})
+    check("stale cached lookups are dropped, fresh ones kept",
+          _sm.purge_stale_caches(store) >= 1 and store.get_setting("lookup:UCstale:30") is None and store.get_setting("lookup:UCfresh:30") is not None)
+    # a linked channel's windows come from YouTube Analytics (the numbers Studio shows)
+    store._exec("DELETE FROM daily WHERE channel_id=?", (_linked_id,))
+    for _n in range(1, 400):
+        store._exec("INSERT OR REPLACE INTO daily(channel_id, day, views) VALUES (?,?,?)", (_linked_id, _day(_n), 100))
+    _an = _sm._view_windows(_cat, {"views": 1, "videos": 1}, store, _linked_id)
+    check("a linked channel's windows are YouTube Analytics' exact numbers",
+          _an["28d"]["method"] == "analytics" and _an["28d"]["views"] == 2800 and _an["1yr"]["views"] == 36500 and _an["7d"]["views"] == 700)
+    _pw = _sm._view_windows(_cat, {"views": 1, "videos": 1}, store, "UCpublicold00000000000001")
+    check("any other channel: 30-day retention, the long windows are estimates for good",
+          _pw["3mo"]["method"] == "estimate" and _pw["3mo"]["beyond_retention"] and _pw["3mo"]["retention_days"] == 30)
+    # the daily job: every followed channel read once a UTC day, behind an open idempotent endpoint
+    _sm.follow(store, "UC0followed0000000000001")
+    store.set_setting("daily_job", {})
+    anon_c = application.test_client()
+    r1 = anon_c.get("/api/cron/daily")
+    _deadline = time.time() + 10
+    while time.time() < _deadline and (store.get_setting("daily_job") or {}).get("state") != "done":
+        time.sleep(0.1)
+    _dj = store.get_setting("daily_job") or {}
+    r2 = anon_c.get("/api/cron/daily").get_json()
+    _snap = store._one("SELECT COUNT(*) AS n FROM channel_snapshots WHERE channel_id='UC0followed0000000000001' AND day=?", (_today_s,))["n"]
+    check("the daily job reads every followed channel (open endpoint, no login needed)",
+          r1.status_code == 200 and r1.get_json()["ran"] and _dj.get("state") == "done" and _snap == 1
+          and _dj["snapshots"]["channels"] >= 2)
+    check("...and runs at most once a day", r2["ran"] is False and r2["state"] == "done")
+    _js = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static", "app.js"), encoding="utf-8").read()
+    check("the Search page says what each window number is", all(x in _js for x in ("exact · YouTube Analytics", "measured · exact", "usually within", "exact in", "rough estimate", "interpolated across")))
 
     srv.shutdown()
     n_ok = sum(1 for _, ok in CHECKS if ok)
