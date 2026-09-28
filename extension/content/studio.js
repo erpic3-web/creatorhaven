@@ -325,7 +325,8 @@
 
   // Tell the MAIN-world probe whether it should report at all (it defaults to on).
   function pushProbeCtl() {
-    try { window.postMessage({ source: 'sf-probe-ctl', enabled: !!settings.studioProbe }, location.origin); }
+    try { window.postMessage({ source: 'sf-probe-ctl', enabled: !!settings.studioProbe,
+      capture: !!settings.studioProbeCapture, latestPlus: settings.studioLatestPlus !== false }, location.origin); }
     catch (e) { warn('probeCtl', e); }
   }
 
@@ -357,7 +358,7 @@
         const patch = {};
         for (const [k, c] of Object.entries(changes)) patch[k] = c.newValue === undefined ? SF.SF_DEFAULTS[k] : c.newValue;
         settings = SF.withDefaults(Object.assign({}, settings, patch));
-        if ('studioProbe' in patch) pushProbeCtl();
+        if ('studioProbe' in patch || 'studioLatestPlus' in patch || 'studioProbeCapture' in patch) pushProbeCtl();
         if ('discordUrl' in patch && pillRef) { pillRef.remove(); pillRef = null; }
       });
       scheduleRun();

@@ -1,5 +1,5 @@
 /* CreatorHaven — on-page thumbnail grabber. "Creator Ledger" design system: void #161719 /
- * steel #1E2124, burnt crimson #A31D1D only for on/active states, sans only (Space Grotesk
+ * steel #1E2124, burnt crimson #FF4500 only for on/active states, sans only (Space Grotesk
  * tags, Inter body), 2px corners, 1px zinc-800 hairlines, no shadows except the floating
  * overlay lift. Every hook is sf-tg- prefixed; colours are self-contained so the spotlight
  * reads identically on light/dark YouTube. Motion = one spring curve. */
@@ -17,7 +17,7 @@
 .sf-tg-fab:active { transform: translateY(0) scale(.99); }
 .sf-tg-fab svg { width: 16px; height: 16px; display: block; fill: none; stroke: currentColor; stroke-width: 1; stroke-linecap: round; stroke-linejoin: round; }
 .sf-tg-fabtxt { writing-mode: vertical-rl; font: 600 10px/1 "Space Grotesk", "Inter", system-ui, sans-serif; text-transform: uppercase; letter-spacing: .14em; color: currentColor; }
-.sf-tg-fab.sf-tg-on { color: #FFFFFF; background: #A31D1D; border-color: #A31D1D; }
+.sf-tg-fab.sf-tg-on { color: #FFFFFF; background: #FF4500; border-color: #FF4500; }
 
 /* ---- dim backdrop + highlight layer ---- */
 .sf-tg-overlay {
@@ -67,7 +67,7 @@
 .sf-tg-farrow { color: #71717A; }
 .sf-tg-fopt { border: 0; background: transparent; padding: 4px 0 3px; margin: 0; cursor: pointer; color: #AAAAB2; border-bottom: 1px solid transparent; border-radius: 0;
   font: inherit; text-transform: inherit; letter-spacing: inherit; transition: all .2s cubic-bezier(.16,1,.3,1); }
-.sf-tg-fopt:hover { color: #FFFFFF; border-bottom-color: #A31D1D; }
+.sf-tg-fopt:hover { color: #FFFFFF; border-bottom-color: #FF4500; }
 .sf-tg-fopts:hover .sf-tg-fopt { opacity: .4; }
 .sf-tg-fopts:hover .sf-tg-fopt:hover { opacity: 1; }
 
@@ -89,7 +89,7 @@
   background: #1E2124; color: #AAAAB2;
   display: inline-flex; align-items: center; justify-content: center; transition: all .2s cubic-bezier(.16,1,.3,1);
 }
-.sf-tg-btn:hover { color: #FFFFFF; border-color: #A31D1D; }
+.sf-tg-btn:hover { color: #FFFFFF; border-color: #FF4500; }
 .sf-tg-btn svg { width: 15px; height: 15px; display: block; fill: none; stroke: currentColor; stroke-width: 1; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ---- title caption (hover, on the spotlight box) ---- */

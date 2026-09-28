@@ -41,13 +41,20 @@
   const site = () => SF.normalizeSiteUrl(settings.siteUrl);
 
   /* --------------------------------------------------------------- baseline cache + batch */
-  const BASE_TTL = 24 * 3600 * 1000;
+  // Badges appear within a second or two: small batches go out as soon as cards are seen,
+  // several at once, in page order (top of the feed first). A channel with a real baseline is
+  // cached 24 h; "no baseline" only 1 h; a FAILED request (site off, network, bad token) is
+  // never cached — it is retried with backoff instead of hiding that channel's badges all day.
+  const BASE_TTL = 24 * 3600 * 1000, EMPTY_TTL = 3600 * 1000;
+  const BATCH = 12, PARALLEL = 3, FIRST_DELAY = 120;
+  const RETRY_MS = [4000, 15000, 60000];
   const mem = new Map();              // ident -> {t, base}
   const pending = new Map();          // ident -> [cb, ...]
   let queue = new Set();
-  let flushT = 0;
+  let flushT = 0, inflight = 0, failures = 0;
 
-  const fresh = (rec) => rec && (Date.now() - rec.t) < BASE_TTL;
+  const ttl = (rec) => (rec && rec.base && (rec.base.median_long || rec.base.median)) ? BASE_TTL : EMPTY_TTL;
+  const fresh = (rec) => rec && (Date.now() - rec.t) < ttl(rec);
   const getBase = (ident) => { const r = mem.get(ident); return fresh(r) ? r.base : undefined; };
 
   async function loadStored(idents) {
@@ -58,45 +65,65 @@
     } catch (e) { /* storage.local may be unavailable; fall through to fetch */ }
   }
 
+  function kick(delay) {
+    if (flushT) return;               // a flush is already scheduled; never push it back
+    flushT = setTimeout(() => { flushT = 0; safe('flush', pump); }, delay);
+  }
+
   function requestBase(ident, cb) {
     const have = getBase(ident);
     if (have !== undefined) { cb(have); return; }
     if (!pending.has(ident)) pending.set(ident, []);
     pending.get(ident).push(cb);
     queue.add(ident);
-    clearTimeout(flushT); flushT = setTimeout(() => safe('flush', flush), 350);
+    kick(FIRST_DELAY);
   }
 
-  async function flush() {
-    const idents = [...queue].slice(0, 40);
-    queue = new Set([...queue].slice(40));
-    if (!idents.length) return;
+  function pump() {
+    while (inflight < PARALLEL && queue.size) {
+      const idents = [...queue].slice(0, BATCH);
+      for (const i of idents) queue.delete(i);
+      inflight++;
+      flush(idents).catch((e) => warn('flush', e)).finally(() => { inflight--; if (queue.size) kick(0); });
+    }
+  }
+
+  function deliver(i, base) {
+    const cbs = pending.get(i) || []; pending.delete(i);
+    cbs.forEach((cb) => safe('cb', () => cb(base)));
+  }
+
+  async function flush(idents) {
     await loadStored(idents);
     const need = idents.filter((i) => getBase(i) === undefined);
-    let res = {};
-    if (need.length) {
-      try {
-        const r = await fetch(site() + '/api/ext/baselines', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-SF-Token': settings.token || '' },
-          body: JSON.stringify({ channels: need })
-        });
-        if (r.ok) res = (await r.json()).baselines || {};
-      } catch (e) { warn('fetch', e); }
+    for (const i of idents) if (!need.includes(i)) deliver(i, getBase(i));
+    if (!need.length) return;
+    let res = null;
+    try {
+      const r = await fetch(site() + '/api/ext/baselines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-SF-Token': settings.token || '' },
+        body: JSON.stringify({ channels: need })
+      });
+      if (r.ok) res = (await r.json()).baselines || {};
+      else warn('fetch', 'HTTP ' + r.status);
+    } catch (e) { warn('fetch', e); }
+    if (!res) {                               // failed: keep the callbacks, retry later, cache nothing
+      const wait = RETRY_MS[Math.min(failures, RETRY_MS.length - 1)]; failures++;
+      setTimeout(() => { for (const i of need) queue.add(i); kick(0); }, wait);
+      return;
     }
+    failures = 0;
     const toStore = {};
-    for (const i of idents) {
-      let base = getBase(i);
-      if (base === undefined) {                 // still unknown -> take the response (or null) and cache it
-        base = (i in res) ? res[i] : null;
-        const rec = { t: Date.now(), base };
-        mem.set(i, rec); toStore['sfbl:' + i] = rec;
-      }
-      const cbs = pending.get(i) || []; pending.delete(i);
-      cbs.forEach((cb) => safe('cb', () => cb(base)));
+    for (const i of need) {
+      const b = res[i];
+      const base = (b && !b.error) ? b : null;
+      if (b && b.error) { deliver(i, null); continue; }   // a server-side hiccup for one channel: don't cache it
+      const rec = { t: Date.now(), base };
+      mem.set(i, rec); toStore['sfbl:' + i] = rec;
+      deliver(i, base);
     }
     try { if (Object.keys(toStore).length) await api.storage.local.set(toStore); } catch (e) { /* ignore */ }
-    if (queue.size) { clearTimeout(flushT); flushT = setTimeout(() => safe('flush', flush), 350); }
   }
 
   /* --------------------------------------------------------------- DOM */
@@ -124,41 +151,81 @@
     return pageChannel();     // grid cards on a channel page carry no channel link
   }
 
+  // Metadata text nodes across layouts: old (#metadata-line / inline-metadata-item),
+  // the -wiz__ lockup, and the CURRENT camelCase lockup (ytContentMetadataViewModelMetadataText).
+  const META_SEL = '#metadata-line span, .inline-metadata-item, #metadata span, .ytd-video-meta-block span, ' +
+    '.yt-content-metadata-view-model-wiz__metadata-text, .ytContentMetadataViewModelMetadataText';
+
   function cardViews(card) {
-    const spans = card.querySelectorAll('#metadata-line span, .inline-metadata-item, #metadata span, .ytd-video-meta-block span, .yt-content-metadata-view-model-wiz__metadata-text');
-    for (const s of spans) { const v = viewsFromText(s.textContent); if (v !== null) return v; }
-    const t = card.querySelector('#video-title, a#video-title-link, #video-title-link, .yt-lockup-metadata-view-model-wiz__title');
+    for (const s of card.querySelectorAll(META_SEL)) { const v = viewsFromText(s.textContent); if (v !== null) return v; }
+    const t = titleEl(card);
     if (t) { const v = viewsFromText(t.getAttribute('aria-label') || t.getAttribute('title')); if (v !== null) return v; }
+    // last resort: any leaf element on the card that mentions "views"
+    for (const e of card.querySelectorAll('span, div')) {
+      if (!e.firstElementChild) { const v = viewsFromText(e.textContent); if (v !== null) return v; }
+    }
     return null;
   }
 
-  const titleEl = (card) => card.querySelector('#video-title, a#video-title-link, #video-title-link, .yt-lockup-metadata-view-model-wiz__title');
+  const titleEl = (card) => card.querySelector(
+    '#video-title, a#video-title-link, #video-title-link, .yt-lockup-metadata-view-model-wiz__title, a.ytLockupMetadataViewModelTitle'
+  );
+
+  // Where the outlier bubble goes: the metadata row holding the view count (new camelCase
+  // lockup), else the -wiz__ row, else the classic channel byline. Placed by the views so it
+  // reads "… · 1.2M views · 3d  2.3×" while scrolling the feed.
+  function bylineHost(card) {
+    const rows = card.querySelectorAll('.ytContentMetadataViewModelMetadataRow, .yt-content-metadata-view-model-wiz__metadata-row');
+    for (const r of rows) { if (/\bviews\b/i.test(r.textContent || '')) return r; }
+    return card.querySelector('ytd-channel-name #text, ytd-channel-name yt-formatted-string, #channel-name #text')
+      || card.querySelector('.yt-content-metadata-view-model-wiz__metadata-row .yt-core-attributed-string')
+      || rows[0] || null;
+  }
+
+  const fmt = (r) => r >= 10 ? Math.round(r) + '×'
+    : r >= 1 ? r.toFixed(1).replace(/\.0$/, '') + '×'
+      : r.toFixed(2) + '×';
+
+  // A heat scale: the bigger the outlier the hotter and more filled the bubble.
+  const tierOf = (r) => r >= 10 ? 'x10' : r >= 5 ? 'x5' : r >= 3 ? 'x3'
+    : r >= 2 ? 'x2' : r >= 1.2 ? 'up' : r >= 0.8 ? 'ok' : 'low';
 
   function render(b, ratio) {
-    const txt = ratio >= 100 ? Math.round(ratio) + '×'
-      : ratio >= 10 ? ratio.toFixed(0) + '×'
-        : ratio.toFixed(ratio >= 1 ? 1 : 2) + '×';
+    const txt = fmt(ratio);
     b.textContent = txt;
-    b.dataset.tier = ratio >= 5 ? 'fire' : ratio >= 2 ? 'hot' : ratio >= 0.8 ? 'ok' : 'cold';
+    b.dataset.tier = tierOf(ratio);
     b.title = 'CreatorHaven outlier — ' + txt + " the channel's median views";
   }
 
+  function placeBadge(card) {
+    // Prefer the channel byline (beside the sub count); fall back to the title so the badge
+    // still shows on layouts where the byline can't be found.
+    const host = bylineHost(card) || titleEl(card);
+    if (!host) return null;
+    let b = host.querySelector(':scope > .sf-ol-badge') || card.querySelector('.sf-ol-badge');
+    if (b && b.parentElement !== host) { b.remove(); b = null; }
+    if (!b) { b = document.createElement('span'); b.className = 'sf-ol-badge'; }
+    const subs = host.querySelector('.sf-subs');     // yt.js sub-count pill, if present
+    if (subs && subs.nextSibling !== b) host.insertBefore(b, subs.nextSibling);
+    else if (!b.parentElement) host.appendChild(b);
+    return b;
+  }
+
   function process(card) {
-    const el = titleEl(card);
-    if (!el) return;
+    if (!titleEl(card) && !bylineHost(card)) return;
     const views = cardViews(card);
     const ident = cardChannel(card);
     if (views == null || !ident) return;
     const sig = ident + '|' + views;
-    if (card.dataset.sfOl === sig && el.querySelector('.sf-ol-badge')) return;   // already done, unchanged
+    if (card.dataset.sfOl === sig && card.querySelector('.sf-ol-badge')) return;   // already done, unchanged
     card.dataset.sfOl = sig;
     requestBase(ident, (base) => {
       if (card.dataset.sfOl !== sig) return;                 // card was recycled while we waited
       const med = base && (base.median_long || base.median);
-      let b = el.querySelector('.sf-ol-badge');
-      if (!med) { if (b) b.remove(); return; }
-      if (!b) { b = document.createElement('span'); b.className = 'sf-ol-badge'; el.appendChild(b); }
-      render(b, views / med);
+      const existing = card.querySelector('.sf-ol-badge');
+      if (!med) { if (existing) existing.remove(); return; }
+      const b = placeBadge(card);
+      if (b) render(b, views / med);
     });
   }
 
@@ -168,9 +235,17 @@
   }
 
   /* --------------------------------------------------------------- run loop */
-  let scanT = 0;
-  const scan = () => { if (settings.youtubeOutliers) document.querySelectorAll(CARD_SEL).forEach((c) => safe('process', () => process(c))); };
-  const schedule = () => { clearTimeout(scanT); scanT = setTimeout(() => safe('scan', scan), 300); };
+  // THROTTLE, not debounce: YouTube's DOM changes many times a second (hover previews, lazy
+  // thumbnails, live counters), so a debounce that restarts on every mutation could wait
+  // minutes for a quiet moment. This runs within 150 ms of the first change and at most every
+  // 400 ms while the page keeps changing.
+  let scanT = 0, lastScan = 0;
+  const scan = () => { lastScan = Date.now(); if (settings.youtubeOutliers) document.querySelectorAll(CARD_SEL).forEach((c) => safe('process', () => process(c))); };
+  const schedule = () => {
+    if (scanT) return;
+    const wait = Math.max(150, 400 - (Date.now() - lastScan));
+    scanT = setTimeout(() => { scanT = 0; safe('scan', scan); }, wait);
+  };
 
   const mo = new MutationObserver(schedule);
   let lastHref = location.href;
