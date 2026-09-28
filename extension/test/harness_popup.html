@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>CreatorHaven popup harness</title>
+  <!-- Serves the real popup outside the extension runtime:
+         python -m http.server 5975 --bind 127.0.0.1 --directory <extension dir>
+         open http://127.0.0.1:5975/test/harness_popup.html
+       The chrome.* stub below stands in for storage/runtime/tabs; popup.html's markup is fetched
+       and injected, then the real popup.css + lib/common.js + popup.js run against it. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Space+Mono:wght@400;700&family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="../popup.css">
+  <script>
+    globalThis.chrome = {
+      storage: { sync: { get: async d => d, set: async () => {} }, onChanged: { addListener() {} } },
+      runtime: { sendMessage: () => Promise.resolve({ ok: true }), onMessage: { addListener() {} }, getURL: p => '../' + p },
+      tabs: { query: async () => [], create() {} }
+    };
+  </script>
+</head>
+<body>
+  <script>
+    (async () => {
+      const html = await (await fetch('../popup.html')).text();
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      doc.querySelectorAll('script').forEach(s => s.remove());
+      document.body.append(...Array.from(doc.body.childNodes));
+      for (const src of ['../lib/common.js', '../popup.js']) {
+        await new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej; document.body.appendChild(s); });
+      }
+      const page = new URLSearchParams(location.search).get('page');
+      if (page) { const row = document.querySelector('[data-go="' + page + '"]'); if (row) row.click(); }
+    })();
+  </script>
+</body>
+</html>

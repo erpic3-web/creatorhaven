@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en" dark="true">
+<head>
+  <meta charset="utf-8">
+  <title>CreatorHaven grabber harness</title>
+  <!-- A fake YouTube-ish feed for content/thumbgrab.js outside the extension runtime:
+         python -m http.server 5975 --bind 127.0.0.1 --directory <extension dir>
+         open http://127.0.0.1:5975/test/harness_lightbox.html
+       Click the GRAB tab on the right edge, click a thumbnail, then DOWNLOAD in the lightbox. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="../content/thumbgrab.css">
+  <style>
+    body { margin: 0; background: #0f0f0f; color: #f1f1f1; font: 14px/1.4 Arial, sans-serif; padding: 24px; }
+    .grid { display: grid; grid-template-columns: repeat(3, 320px); gap: 24px; }
+    .card a.thumb { display: block; }
+    .card img { width: 320px; height: 180px; object-fit: cover; border-radius: 12px; display: block; background: #222; }
+    .card h3 { margin: 10px 0 4px; font-size: 15px; }
+    .card h3 a { color: #f1f1f1; text-decoration: none; }
+    .card .meta { color: #aaa; font-size: 12px; }
+  </style>
+  <script>
+    globalThis.chrome = {
+      storage: { sync: { get: async d => d, set: async () => {} }, onChanged: { addListener() {} } },
+      runtime: { sendMessage: () => Promise.resolve({ ok: false, error: 'harness' }), onMessage: { addListener() {} }, getURL: p => '../' + p }
+    };
+  </script>
+</head>
+<body>
+  <div class="grid">
+    <div class="card">
+      <a class="thumb" href="/watch?v=dQw4w9WgXcQ"><img src="https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg" alt=""></a>
+      <h3><a href="/watch?v=dQw4w9WgXcQ">Never Gonna Give You Up (Official Video)</a></h3>
+      <div class="meta"><a href="/@RickAstley">Rick Astley</a><br>1.6B views • 15 years ago</div>
+    </div>
+    <div class="card">
+      <a class="thumb" href="/watch?v=9bZkp7q19f0"><img src="https://i.ytimg.com/vi/9bZkp7q19f0/mqdefault.jpg" alt=""></a>
+      <h3><a href="/watch?v=9bZkp7q19f0">PSY - GANGNAM STYLE M/V</a></h3>
+      <div class="meta"><a href="/@officialpsy">officialpsy</a><br>5.2B views • 13 years ago</div>
+    </div>
+    <div class="card">
+      <a class="thumb" href="/watch?v=kJQP7kiw5Fk"><img src="https://i.ytimg.com/vi/kJQP7kiw5Fk/mqdefault.jpg" alt=""></a>
+      <h3><a href="/watch?v=kJQP7kiw5Fk">Luis Fonsi - Despacito ft. Daddy Yankee</a></h3>
+      <div class="meta"><a href="/@LuisFonsi">Luis Fonsi</a><br>8.6B views • 9 years ago</div>
+    </div>
+  </div>
+  <script src="../lib/common.js"></script>
+  <script src="../content/thumbgrab.js"></script>
+  <script>
+    // ?auto=grab  -> turns grab mode on;  ?auto=lightbox -> grab on, open the first thumbnail, reveal the DOWNLOAD options
+    (async () => {
+      const auto = new URLSearchParams(location.search).get('auto');
+      if (!auto) return;
+      const waitFor = async sel => { for (let i = 0; i < 100; i++) { const n = document.querySelector(sel); if (n) return n; await new Promise(r => setTimeout(r, 50)); } return null; };
+      const fab = await waitFor('.sf-tg-fab'); if (!fab) return;
+      fab.click();
+      if (auto !== 'lightbox') return;
+      const box = await waitFor('.sf-tg-box'); if (!box) return;
+      await new Promise(r => setTimeout(r, 300));
+      box.click();
+      await waitFor('.sf-tg-ftoolbar');
+      document.querySelectorAll('.sf-tg-fbtn')[1].click();
+    })();
+  </script>
+</body>
+</html>

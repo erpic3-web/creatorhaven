@@ -210,9 +210,9 @@ t('channelIdFromPath / pathOnly', () => {
 /* ================================================================ settings + generic */
 t('SF_DEFAULTS: every documented key with its default', () => {
   const d = SF.SF_DEFAULTS;
-  assert.equal(d.siteUrl, 'http://127.0.0.1:5800');
+  assert.equal(d.siteUrl, 'https://creatorhaven.onrender.com');
   assert.equal(d.token, ''); assert.equal(d.discordUrl, '');
-  for (const k of ['confirmSignOut', 'exactDates', 'realNames', 'subCounts', 'feedCleaner', 'thumbDownloader', 'playlistSearch', 'videoTags', 'favorites', 'studioProbe', 'studioDiscordButton']) assert.equal(d[k], true, k);
+  for (const k of ['confirmSignOut', 'exactDates', 'realNames', 'subCounts', 'feedCleaner', 'thumbDownloader', 'playlistSearch', 'videoTags', 'favorites', 'studioDiscordButton']) assert.equal(d[k], true, k);
   for (const k of ['shortsRedirect', 'dontRecommend', 'appearance', 'appearanceCompact', 'sizeCustomizer', 'streamerMode']) assert.equal(d[k], false, k);
   assert.equal(d.appearanceAccent, '#ff0000'); assert.equal(d.appearanceFont, '');
   assert.equal(d.playerWidthPct, 100); assert.equal(d.commentsFontPx, 14);
@@ -224,7 +224,7 @@ t('withDefaults: coerces types, drops unknown keys, ignores null', () => {
   assert.equal(s.exactDates, false);
   assert.equal(s.shortsRedirect, true);
   assert.equal(s.token, '123');
-  assert.equal(s.siteUrl, 'http://127.0.0.1:5800');
+  assert.equal(s.siteUrl, 'https://creatorhaven.onrender.com');
   assert.equal(s.commentsFontPx, 14);
   assert.ok(!('bogus' in s));
   assert.equal(SF.withDefaults(undefined).realNames, true);
@@ -232,7 +232,7 @@ t('withDefaults: coerces types, drops unknown keys, ignores null', () => {
 t('normalizeSiteUrl', () => {
   assert.equal(SF.normalizeSiteUrl('127.0.0.1:5800/'), 'http://127.0.0.1:5800');
   assert.equal(SF.normalizeSiteUrl('https://forge.example.com///'), 'https://forge.example.com');
-  assert.equal(SF.normalizeSiteUrl(''), 'http://127.0.0.1:5800');
+  assert.equal(SF.normalizeSiteUrl(''), 'https://creatorhaven.onrender.com');
 });
 t('clamp / chunk / uniq / safeJsonParse', () => {
   assert.equal(SF.clamp(250, 50, 200), 200);
@@ -274,7 +274,7 @@ function listJs(dir, out) {
   return out;
 }
 const JS_FILES = listJs(ROOT, []).map(p => path.relative(ROOT, p).split(path.sep).join('/')).sort();
-const CLASSIC_SCRIPTS = ['lib/common.js', 'bg.js', 'content/yt.js', 'content/studio.js', 'content/studio_probe_main.js', 'popup.js', 'tester.js'];
+const CLASSIC_SCRIPTS = ['lib/common.js', 'bg.js', 'content/yt.js', 'content/studio.js', 'content/studio_probe_main.js', 'popup.js', 'tester.js', 'content/outlier.js', 'content/watchpanel.js'];
 
 let manifest = null;
 t('manifest.json: parses, MV3, required fields', () => {
@@ -465,12 +465,140 @@ t('bg.js: thumbBlob handler exists and is registered for the grabber', () => {
   assert.ok(/function\s+thumbBlob\s*\(/.test(bg), 'bg.js is missing the thumbBlob function');
   assert.ok(/\n\s*thumbBlob,/.test(bg), 'thumbBlob is not registered in the handlers map');
 });
+t('manifest: outlier + watchpanel registered on the youtube.com script, count stays 3', () => {
+  const m = JSON.parse(read('manifest.json'));
+  assert.equal(m.content_scripts.length, 3, 'content_scripts count must stay 3 (append, do not add an entry)');
+  const yt = m.content_scripts.find(cs => (cs.js || []).includes('content/yt.js'));
+  assert.ok(yt && yt.matches.includes('https://www.youtube.com/*'));
+  for (const f of ['content/outlier.js', 'content/watchpanel.js', 'content/outlier.css', 'content/watchpanel.css']) {
+    assert.ok((yt.js || []).concat(yt.css || []).includes(f), f + ' is not registered');
+    assert.ok(exists(f), 'missing ' + f);
+  }
+  assert.ok(yt.js.indexOf('lib/common.js') < yt.js.indexOf('content/watchpanel.js'), 'common.js must load before watchpanel.js');
+});
+t('outlier.css + watchpanel.css: only sf- prefixed class hooks', () => {
+  for (const f of ['content/outlier.css', 'content/watchpanel.css']) {
+    const css = read(f).replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const mm of css.matchAll(/(?:^|[\s>+~,(])\.([a-zA-Z][\w-]*)/g)) assert.ok(mm[1].startsWith('sf-'), f + ' class .' + mm[1] + ' is not sf- prefixed');
+  }
+});
+t('watchpanel.js: IIFE, api shim, no import/export/require, POSTs /api/ext/video with the token', () => {
+  const src = read('content/watchpanel.js');
+  const firstCode = src.split('\n').find(l => l.trim() && !/^\s*(\/\/|\*|\/\*)/.test(l)) || '';
+  assert.ok(/^\s*\((\(\)\s*=>|function)/.test(firstCode), 'should start with an IIFE, got: ' + firstCode);
+  assert.ok(/\)\(\);\s*$/.test(src.trim()), 'should end by invoking the IIFE');
+  assert.ok(src.includes('globalThis.browser ?? globalThis.chrome'), 'missing the browser/chrome shim');
+  const code = src.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  assert.ok(!/^\s*(import|export)\b/m.test(code), 'has an import/export statement');
+  assert.ok(!/\brequire\s*\(/.test(code), 'uses require()');
+  assert.ok(src.includes('/api/ext/video'), 'watchpanel should call /api/ext/video');
+  assert.ok(src.includes("'X-SF-Token'"), 'watchpanel should send the X-SF-Token header');
+  assert.ok(/youtubePanel/.test(src), 'watchpanel must be gated by settings.youtubePanel');
+});
+t('outlier.js: places the badge in the byline and heat-grades by magnitude', () => {
+  const src = read('content/outlier.js');
+  assert.ok(/bylineHost/.test(src), 'outlier.js should find the channel byline host');
+  assert.ok(/sf-subs/.test(src), 'outlier badge should be placed next to the sub-count pill');
+  for (const tier of ['x10', 'x5', 'x3', 'x2', 'up', 'ok', 'low']) assert.ok(src.includes("'" + tier + "'"), 'missing heat tier ' + tier);
+  const css = read('content/outlier.css');
+  for (const tier of ['x10', 'x5', 'x3', 'x2', 'up', 'ok', 'low']) assert.ok(css.includes('data-tier="' + tier + '"'), 'outlier.css missing tier ' + tier);
+});
+t('ad placer: card + 3 modes + 0.1-60s interval + scrubbing timeline in studio_features.js', () => {
+  const src = read('content/studio_features.js');
+  for (const m of ['interval', 'silence', 'subtractive']) assert.ok(src.includes("'" + m + "'"), 'mode ' + m + ' missing');
+  assert.ok(/AD_MODES/.test(src), 'AD_MODES table missing');
+  assert.ok(/function computeAdTimes/.test(src), 'computeAdTimes missing');
+  assert.ok(/function ensureAdCard/.test(src), 'ensureAdCard missing');
+  assert.ok(/requestAnimationFrame/.test(src) && /sf-ap-playhead/.test(src), 'scrubbing playhead missing');
+  assert.ok(/insert ad slot/i.test(src), 'real Studio insertion path missing');
+  assert.ok(/min = '0\.1'/.test(src) && /max = '60'/.test(src) && /step = '0\.1'/.test(src), 'interval input must span 0.1-60 step 0.1');
+  assert.ok(!/function placeMidrolls/.test(src), 'old placeMidrolls should be gone');
+});
+t('ad placer: defaults + popup controls + card CSS', () => {
+  for (const k of ['adPlacerMode', 'adPlacerInterval', 'adPlacerStart', 'adPlacerEnd']) {
+    assert.ok(SF.SF_DEFAULTS[k] !== undefined, 'default ' + k + ' missing');
+    assert.ok(read('popup.html').includes('data-key="' + k + '"'), 'popup control for ' + k + ' missing');
+  }
+  assert.equal(SF.SF_DEFAULTS.adPlacerMode, 'interval');
+  assert.ok(SF.SF_DEFAULTS.adPlacerInterval >= 0.1 && SF.SF_DEFAULTS.adPlacerInterval <= 60);
+  const css = read('content/studio_features.css');
+  for (const c of ['sf-ap-card', 'sf-ap-tab', 'sf-ap-playhead', 'sf-ap-mk', 'sf-ap-lane', 'sf-ap-place']) assert.ok(css.includes('.' + c), 'CSS .' + c + ' missing');
+});
 t('parseVideoId: grabber-style thumbnail hrefs resolve, channel links do not', () => {
   assert.equal(SF.parseVideoId('/watch?v=' + ID + '&list=PLx&index=2'), ID);
   assert.equal(SF.parseVideoId('/shorts/' + ID), ID);
   assert.equal(SF.parseVideoId('https://www.youtube.com/watch?v=' + ID + '&pp=abc'), ID);
   assert.equal(SF.parseVideoId('/@SomeChannel'), null);
   assert.equal(SF.parseVideoId('/feed/subscriptions'), null);
+});
+
+/* ================================================================ 2026-09-28 fix list */
+t('timecodes: Studio MM:SS:FF under an hour, H:MM:SS:FF above, round trip', () => {
+  assert.equal(SF.formatTimecode(30, false), '00:30:00');
+  assert.equal(SF.formatTimecode(90, false), '01:30:00');
+  assert.equal(SF.formatTimecode(884, false), '14:44:00');
+  assert.equal(SF.formatTimecode(10 + 1 / 30, false), '00:10:01');
+  assert.equal(SF.formatTimecode(3725.5, true), '1:02:05:15');
+  assert.equal(SF.formatTimecode(3725.5, true, 30, true), '01:02:05:15');
+  assert.equal(SF.parseTimecode('00:10:01'), 10 + 1 / 30);
+  assert.equal(SF.parseTimecode('14:44:00'), 884);
+  assert.equal(SF.parseTimecode('1:02:05:15'), 3725.5);
+  assert.equal(SF.parseTimecode('junk'), null);
+  for (const t of [0, 30, 59.9, 600, 884]) assert.ok(Math.abs(SF.parseTimecode(SF.formatTimecode(t, false)) - t) < 1 / 30 + 1e-9);
+});
+t('throttle: runs within the lead time and is not starved by a constant stream of calls', async () => {
+  let runs = 0;
+  const f = SF.throttle(() => { runs++; }, 60, 20);
+  const t0 = Date.now();
+  await new Promise((res) => { const iv = setInterval(() => { f(); if (Date.now() - t0 > 300) { clearInterval(iv); res(); } }, 5); });
+  await new Promise((r) => setTimeout(r, 90));
+  assert.ok(runs >= 3, 'a debounce would have run 0-1 times here; throttle ran ' + runs);
+});
+t('rankAmong: ties share a rank, "of" counts the video itself', () => {
+  assert.deepEqual(SF.rankAmong(8, [16, 11, 10, 5, 4, 2, 2, 0]), { rank: 4, of: 9 });
+  assert.deepEqual(SF.rankAmong(99, [1, 2]), { rank: 1, of: 3 });
+  assert.deepEqual(SF.rankAmong(2, [2, 2, 5]), { rank: 2, of: 4 });
+});
+t('ad placer: appears only in the ad-slot editor, moves the playhead before inserting, types Studio’s format, removes red rows by their trash button', () => {
+  const src = read('content/studio_features.js');
+  assert.ok(!/AD_PAGE_RE/.test(src), 'the URL-based gate should be gone');
+  assert.ok(/const adEditorOpen = \(\) => !!deepestButton\(INSERT_RE\)/.test(src), 'gate on the Insert ad slot button');
+  for (const f of ['function seekTo', 'async function placeAt', 'async function typeTime', 'function slotRows', 'async function clearStrayZeros', 'function rowIsRed', 'async function removeRedBreaks', 'function sendDiag'])
+    assert.ok(src.includes(f), f + ' missing');
+  assert.ok(/SF\.formatTimecode\(t, fmt\.hours/.test(src), 'times must be typed in Studio’s timecode format');
+  assert.ok(/red\.del\.click\(\)/.test(src), 'red rows are removed with their own trash button');
+  assert.ok(/SF\.throttle\(/.test(src), 'runAll must be throttled, not debounced');
+  assert.ok(src.includes('/api/ext/markup'), 'diagnostics go to the token-gated endpoint');
+});
+t('latest video card: probe reads Studio’s card + asks for engaged views and all-upload ranking; renderer clones Studio’s rows', () => {
+  const probe = read('content/studio_probe_main.js');
+  for (const f of ['function onDashboard', 'async function runLatest', 'async function rankAll', 'async function studioCall', 'function noteAuth', 'function noteAdSettings'])
+    assert.ok(probe.includes(f), f + ' missing');
+  assert.ok(/creator\/get_creator_videos/.test(probe) && /yta_web\/join/.test(probe) && /creator\/list_creator_videos/.test(probe));
+  assert.ok(/if \(capture && FULL_RE\.test\(url\)/.test(probe), 'full body mirroring must be off unless the developer capture is on');
+  const feat = read('content/studio_features.js');
+  assert.ok(/function renderLatest/.test(feat) && /Ranking vs all videos/.test(feat) && /Engaged views/.test(feat));
+  assert.equal(SF.SF_DEFAULTS.studioLatestPlus, true);
+  assert.equal(SF.SF_DEFAULTS.studioProbeCapture, false);
+});
+t('outlier badges: throttled scan, parallel small batches, failures are retried not cached', () => {
+  const src = read('content/outlier.js');
+  assert.ok(/BATCH = 12, PARALLEL = 3/.test(src));
+  assert.ok(/if \(!res\) \{\s*\/\/ failed: keep the callbacks, retry later, cache nothing/.test(src), 'a failed request must not be cached');
+  assert.ok(!/clearTimeout\(scanT\); scanT = setTimeout/.test(src), 'the scan must not be a restarting debounce');
+});
+
+t('public release: hosted site by default, https for bare domains, personal key on an Account page, Studio numbers opt-in', () => {
+  assert.equal(SF.SF_DEFAULTS.siteUrl, 'https://creatorhaven.onrender.com');
+  assert.equal(SF.normalizeSiteUrl('creatorhaven.onrender.com/'), 'https://creatorhaven.onrender.com');
+  assert.equal(SF.normalizeSiteUrl('localhost:5800'), 'http://localhost:5800');
+  assert.equal(SF.SF_DEFAULTS.studioProbe, false, 'sending Studio numbers must be opt-in');
+  const m = JSON.parse(read('manifest.json'));
+  assert.ok(m.host_permissions.includes('https://creatorhaven.onrender.com/*'));
+  const html = read('popup.html');
+  assert.ok(/data-page="account"/.test(html) && /data-go="account"/.test(html));
+  for (const id of ['testBtn', 'connStatus', 'openSite']) assert.ok(html.includes('id="' + id + '"'), id + ' missing');
+  assert.ok(/<section class="page hidden" data-page="account">[\s\S]*data-key="token"[\s\S]*<\/section>/.test(html), 'the key field belongs on the Account page');
 });
 
 /* ================================================================ runner */
