@@ -835,10 +835,23 @@
     for (let n = w.nextNode(); n; n = w.nextNode()) if (re.test(n.nodeValue || '')) return n.parentElement;
     return null;
   }
+  // Studio's card rows carry hidden tooltips (a "Top videos by views" list, "typical range" notes)
+  // and our own "i" explainer: neither is part of what a row SHOWS
+  const NOT_SHOWN = 'ytcp-paper-tooltip, tp-yt-paper-tooltip, [role="tooltip"], .sf-sf-info';
+  function plainText(root) {                   // the text a row shows, without tooltips or our "i"
+    let s = '';
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n = w.nextNode(); n; n = w.nextNode()) {
+      const p = n.parentElement;
+      if (p && p !== root && p.closest(NOT_SHOWN) && root.contains(p.closest(NOT_SHOWN))) continue;
+      s += (n.nodeValue || '') + ' ';
+    }
+    return s.replace(/\s+/g, ' ').trim();
+  }
   function rowFor(labelEl, card, valueRe) {    // climb from a label to the row that also holds its value
     let n = labelEl;
     for (let i = 0; n && n !== card && i < 6; i++, n = n.parentElement) {
-      if (valueRe.test((n.textContent || '').replace(/\s+/g, ' ').trim())) return n;
+      if (valueRe.test(plainText(n))) return n;
     }
     return null;
   }
@@ -847,6 +860,13 @@
     const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     for (let n = w.nextNode(); n; n = w.nextNode()) if ((n.nodeValue || '').trim()) out.push(n);
     return out;
+  }
+  function shownLeaves(root) {                 // text nodes the user can actually see
+    return textLeaves(root).filter((n) => {
+      const p = n.parentElement;
+      if (!p || p.closest(NOT_SHOWN)) return false;
+      try { return p.getClientRects().length > 0 && getComputedStyle(p).visibility !== 'hidden'; } catch (_) { return false; }
+    });
   }
   function fmtSpan(s) {
     s = Math.max(0, Math.round(s || 0));
@@ -874,20 +894,28 @@
     let row = card.querySelector('.sf-latest-row[data-k="' + key + '"]');
     if (!row) {
       if (!after) return;
+      // a copy of Studio's own row keeps the card's look; drop what makes it live (links, icons),
+      // the hidden tooltips (writing our value into THEIR text is what left the row blank) and
+      // ids, so Studio's code and ours never see two #table-ranking
       row = after.cloneNode(true);
-      row.querySelectorAll('a, button, [role="button"], tp-yt-paper-icon-button, ytcp-icon-button, yt-icon, tp-yt-iron-icon, svg, img').forEach((n) => n.remove());
-      if (textLeaves(row).length < 2) {        // an unexpected layout: our own plain row instead
-        row = el('div', 'sf-latest-simple');
-        row.appendChild(el('span')); row.appendChild(el('span'));
-      }
+      row.querySelectorAll('a, button, [role="button"], tp-yt-paper-icon-button, ytcp-icon-button, yt-icon, tp-yt-iron-icon, svg, img, ' + NOT_SHOWN).forEach((n) => n.remove());
+      [row, ...row.querySelectorAll('[id], [tabindex], [role]')].forEach((n) => { n.removeAttribute('id'); n.removeAttribute('tabindex'); n.removeAttribute('role'); });
       row.classList.add('sf-latest-row'); row.dataset.k = key;
       after.insertAdjacentElement('afterend', row);
+      if (shownLeaves(row).length < 2) {       // an unexpected layout: our own plain row instead
+        const simple = el('div', 'sf-latest-simple');
+        simple.appendChild(el('span')); simple.appendChild(el('span'));
+        simple.classList.add('sf-latest-row'); simple.dataset.k = key;
+        row.replaceWith(simple); row = simple;
+      }
     }
-    const leaves = textLeaves(row);
     if (row.classList.contains('sf-latest-simple')) { row.children[0].textContent = label; row.children[1].textContent = v.value; }
-    else if (leaves.length >= 2) {
-      leaves[0].nodeValue = label; leaves[leaves.length - 1].nodeValue = v.value;
-      for (let i = 1; i < leaves.length - 1; i++) leaves[i].nodeValue = '';
+    else {
+      const leaves = shownLeaves(row);         // only text the user can see gets our label/value
+      if (leaves.length >= 2) {
+        leaves[0].nodeValue = label; leaves[leaves.length - 1].nodeValue = v.value;
+        for (let i = 1; i < leaves.length - 1; i++) leaves[i].nodeValue = '';
+      }
     }
     row.title = v.tip;
   }
@@ -895,17 +923,22 @@
     const info = latestInfo;
     const stale = document.querySelectorAll('.sf-latest-row');
     if (settings.studioLatestPlus === false || !info) { stale.forEach((r) => r.remove()); return; }
-    const title = textEl(document.body, /^\s*latest video performance\s*$/i);
-    if (!title) return;
-    let card = title;
-    for (let i = 0; card && i < 10 && !/ranking by views/i.test(card.textContent || ''); i++) card = card.parentElement;
+    // "Latest video performance", or "Latest Short performance" when the newest upload is a Short;
+    // Studio's own card component is the fallback, whatever the UI language
+    const title = textEl(document.body, /^\s*latest (video|short) performance\s*$/i);
+    let card = title || document.querySelector('yta-entity-snapshot');
+    for (let i = 0; card && i < 10 && !(/ranking by views/i.test(card.textContent || '') || card.querySelector('#table-ranking')); i++) card = card.parentElement;
     if (!card) return;
+    // ...and climb to the element that also holds the video's link/thumbnail
+    for (let i = 0; i < 6 && card.parentElement && !card.querySelector('a[href*="/video/"], img[src*="/vi/"]'); i++) card = card.parentElement;
     // only draw on the card of the same video (a channel switch loads another dashboard)
     const ids = [...card.querySelectorAll('a[href*="/video/"], img[src*="/vi/"]')]
       .map((n) => ((n.getAttribute('href') || n.getAttribute('src') || '').match(/\/(?:video|vi)\/([\w-]{11})/) || [])[1]).filter(Boolean);
     if (ids.length && !ids.includes(info.videoId)) { card.querySelectorAll('.sf-latest-row').forEach((r) => r.remove()); return; }
     const rankLbl = textEl(card, /^\s*ranking by views\s*$/i);
-    const rankRow = rankLbl && rowFor(rankLbl, card, /ranking by views\s*\d[\d,]*\s*of\s*\d/i);
+    const rankCell = card.querySelector('#table-ranking');
+    const rankRow = (rankLbl && rowFor(rankLbl, card, /ranking by views\s*\d[\d,]*\s*of\s*\d/i))
+      || (rankCell && rankCell.closest('.table-row'));
     const viewsLbl = textEl(card, /^\s*views\s*$/i);
     const viewsRow = viewsLbl && rowFor(viewsLbl, card, /^views\s*[\d.,]+\s*[KMB]?\b/i);
     putRow(card, 'rank', rankRow, 'Ranking vs all videos', latestRank(info));
