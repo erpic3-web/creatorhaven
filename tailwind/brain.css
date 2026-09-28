@@ -49,19 +49,9 @@
   @keyframes blur-in { from { opacity: 0; transform: translateY(18px); filter: blur(6px); } to { opacity: 1; transform: none; filter: blur(0); } }
 }
 
-/* ---- the obsidian ground: while the brain is the active section the whole
-   page chrome drops into the dark token set, whatever the theme toggle says */
-body.brain-active {
-  --bg: #161719; --ground: #161719; --panel: #1E2124; --panel2: #23272B; --card: #1E2124; --elev: #23272B;
-  --line: #27272A; --line2: #3F3F46; --hover: #23272B; --surface: #1E2124;
-  --text: #ffffff; --muted: #AAAAB2; --faint: #6B6B75;
-  --accent: #A31D1D; --accent-soft: #C4302B; --accent-ink: #ffffff; --accent2: #E4E4E7; --trail: #E4E4E7;
-  --grad: #A31D1D; --grad-soft: rgba(163,29,29,.12);
-  --nav-bg: #161719; --nav-line: #27272A; --nav-text: #e4e4e7; --nav-muted: #AAAAB2; --nav-faint: #6B6B75;
-  --nav-hover: #23272B; --nav-active-bg: rgba(163,29,29,.14); --nav-active-tx: #ffffff;
-  color-scheme: dark;
-  background: #161719 !important;
-}
+/* The brain used to force a dark token set on the whole page (body.brain-active) whatever the
+   theme toggle said. It now follows the theme: style.css points the zinc/white/amber colour
+   variables used below at the light/dark theme tokens. */
 /* a transform animation on an ancestor would re-parent the fixed dock for its duration */
 body.brain-active #tab-studio.active, #ssec-strategy.on { animation: none; }
 
