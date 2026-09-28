@@ -19,7 +19,12 @@ services:
       - key: REQUIRE_LOGIN
         value: "true"          # public site: every visitor signs in to their own account
       - key: OWNER_EMAIL
-        sync: false            # set in the dashboard: ONLY the sign-up with this email becomes the owner
+        sync: false            # set in the dashboard: the owner's sign-in address (account 1)
+      - key: OWNER_PASSWORD
+        sync: false            # set in the dashboard: the owner's password; the owner account is created
+                               # at boot, nobody can claim it by signing up. Change it = reset on next boot.
+      - key: CONTACT_EMAIL
+        sync: false            # optional: the contact address printed on /privacy (the owner's own is never shown)
       - key: GEMINI_API_KEY
         sync: false            # strategy brain, predictor, thumbnail review/generator
       - key: YOUTUBE_API_KEY

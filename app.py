@@ -60,6 +60,36 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
         state["log"].append(f"{time.strftime('%H:%M:%S')} {msg}")
         del state["log"][:-200]
 
+    def seed_owner():
+        """Hosted: account 1 (the owner) is built at boot from OWNER_EMAIL + OWNER_PASSWORD, so there
+        is never a window in which a stranger could sign up as the owner. A changed OWNER_PASSWORD
+        resets the owner's password on the next boot (the recovery path)."""
+        oe = (cfg.get("owner_email") or "").strip().lower()
+        pw = cfg.get("owner_password") or ""
+        if not (cfg.get("require_login") and oe and pw):
+            return
+        other = store.user_by_email(oe)
+        if other and other["id"] != 1:
+            log(f"[auth] OWNER_EMAIL already belongs to account {other['id']}: owner not seeded")
+            return
+        if store.owner_unclaimed():
+            salt, h = authn.hash_password(pw)
+            store.claim_owner({"email": oe, "name": oe.split("@")[0], "pw_hash": h, "pw_salt": salt,
+                               "provider": "password"})
+            log("[auth] owner account created from OWNER_EMAIL / OWNER_PASSWORD")
+            return
+        u1 = store.get_user(1) or {}
+        if (u1.get("email") or "").strip().lower() == oe and \
+                not authn.verify_password(pw, u1.get("pw_salt"), u1.get("pw_hash")):
+            salt, h = authn.hash_password(pw)
+            store.set_user_password(1, h, salt)
+            log("[auth] owner password reset from OWNER_PASSWORD")
+
+    try:
+        seed_owner()
+    except Exception as e:
+        log(f"[auth] owner seeding failed: {e}")
+
     def api_base():
         return bases.get("api_base", api_youtube.API_BASE)
 
@@ -167,9 +197,8 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
         uid = session.get("uid")
         if not uid:
             return False
-        oe = (cfg.get("owner_email") or "").strip().lower()
-        if oe and _current_email() == oe:
-            return True
+        # the owner is account 1, full stop: trusting OWNER_EMAIL by address would make anyone
+        # who signs up with that address (nothing checks the inbox) an owner
         return uid == 1
 
     def is_admin():
@@ -224,12 +253,20 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
         store.set_uid(uid)
         store.touch_login(uid)
 
-    def claim_or_create(email, fields):
-        """First real signup (or the configured owner_email) claims the placeholder owner
-        account so the operator keeps their linked channels; everyone else gets a fresh one."""
+    def claim_or_create(email, fields, verified=False):
+        """The placeholder owner account (id 1) keeps the operator's linked channels. OWNER_EMAIL
+        claims it only through a sign-in that VERIFIED that address (a password signup proves nothing
+        about the inbox; the hosted owner gets account 1 at boot from OWNER_PASSWORD instead). A local
+        install without OWNER_EMAIL keeps "the first signup is the operator"; a hosted one never
+        hands the owner to whoever signs up first. Everyone else gets a fresh account."""
         owner_email = (cfg.get("owner_email") or "").strip().lower()
-        if store.owner_unclaimed() and (not owner_email or (email or "").strip().lower() == owner_email):
-            return store.claim_owner(fields)
+        if store.owner_unclaimed():
+            if owner_email:
+                may_claim = verified and (email or "").strip().lower() == owner_email
+            else:
+                may_claim = not hosted()
+            if may_claim:
+                return store.claim_owner(fields)
         uid = store.create_user(fields)
         moved = thumbs.prepare_new_user(uid)   # a fresh account never inherits a leftover u<id> folder
         if moved:
@@ -245,13 +282,17 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
             store.link_provider(hit["id"], provider, sub, info.get("avatar"))
             return hit["id"]
         email = info.get("email")
+        verified = bool(info.get("email_verified"))
         by_email = store.user_by_email(email) if email else None
         if by_email:
+            if not verified:     # an unverified address must not open the account that owns it
+                log(f"[auth] {provider} sign-in refused: unverified address matches account {by_email['id']}")
+                return None
             store.link_provider(by_email["id"], provider, sub, info.get("avatar"))
             return by_email["id"]
         fields = {"email": email, "name": info.get("name"), "avatar": info.get("avatar"),
                   "provider": provider, "provider_sub": sub}
-        return claim_or_create(email or "", fields)
+        return claim_or_create(email or "", fields, verified=verified)
 
     def signin_redirect(provider):
         base = (cfg.get("base_url") or f"http://127.0.0.1:{cfg['port']}").rstrip("/")
@@ -269,6 +310,10 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
             return jsonify({"ok": False, "error": "Use a password of at least 8 characters."}), 400
         if store.user_by_email(email):
             return jsonify({"ok": False, "error": "That email already has an account — sign in instead."}), 409
+        oe = (cfg.get("owner_email") or "").strip().lower()
+        if oe and email.lower() == oe and store.owner_unclaimed():
+            log("[auth] signup with OWNER_EMAIL refused: set OWNER_PASSWORD on the server, the owner account is created at boot")
+            return jsonify({"ok": False, "error": "That email is reserved for the site owner."}), 403
         salt, h = authn.hash_password(pw)
         uid = claim_or_create(email, {"email": email, "name": name, "pw_hash": h, "pw_salt": salt,
                                       "provider": "password"})
@@ -412,6 +457,8 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
         pub["thumbs_daily_free"] = int(cfg.get("thumbs_daily_free") or 0)
         if is_owner():
             pub["admin_emails"] = list(cfg.get("admin_emails") or [])
+            if not pub.get("ext_token") and uid:
+                pub["ext_token"] = store.ext_token_for(uid)
         else:
             # the site-wide extension token acts as the OWNER; everyone else gets their own key
             pub.pop("ext_token", None)
@@ -1259,7 +1306,8 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
 
     @app.get("/privacy")
     def privacy():
-        return render_template("privacy.html", app_name=config.APP_NAME, base_url=cfg.get("base_url") or "", owner_email=cfg.get("owner_email") or "")
+        return render_template("privacy.html", app_name=config.APP_NAME, base_url=cfg.get("base_url") or "",
+                               contact_email=cfg.get("contact_email") or "")
 
     @app.get("/api/ext/ping")
     def ext_ping():
