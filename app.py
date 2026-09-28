@@ -14,17 +14,19 @@ import time
 from datetime import date, timedelta
 from pathlib import Path
 
-from flask import Flask, jsonify, redirect, render_template, request, send_from_directory, session
+from flask import Flask, g, jsonify, redirect, render_template, request, send_from_directory, session
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from sf import alerts as alerts_mod          # noqa: E402
-from sf import (api_analytics, api_youtube, config, gemini, http, imagegen, innertube, metrics, persist, radar,  # noqa: E402
+from sf import (api_analytics, api_youtube, authn, config, gemini, http, imagegen, innertube, metrics, persist, radar,  # noqa: E402
                 oauth, planner, predict, strategist, sync, thumbs, tools)
 from sf.store import Store                    # noqa: E402
 
-OPEN_PATHS = ("/api/login", "/api/status", "/static/", "/api/ext/", "/oauth/cb", "/favicon.ico", "/thumbs/")
+OWNER_SETTINGS = ("admin_emails", "ai_whitelist_only", "thumbs_daily_free", "ext_daily_units")
+OPEN_PATHS = ("/api/auth/", "/api/status", "/static/", "/api/ext/", "/oauth/cb", "/auth/", "/privacy",
+              "/favicon.ico", "/manifest.webmanifest", "/sw.js")
 
 
 def create_app(cfg=None, store=None, bases=None, start_background=False):
@@ -34,6 +36,17 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
         if persist.configure(cfg.get("database_url")):
             persist.restore(cfg["database"])
         store = Store(cfg["database"])
+    thumbs.migrate_legacy()          # move the operator's pre-multi-user thumbnails under u1/
+    try:                             # owner-panel settings live in the database (durable when hosted)
+        for k, v in (store.get_setting("cfg:overrides") or {}).items():
+            if k in OWNER_SETTINGS:
+                cfg[k] = v
+    except Exception:
+        pass
+    try:                             # "only 0 scheduled" alerts raised on channels we cannot see into
+        alerts_mod.retire_blind_stock_alerts(store)
+    except Exception:
+        pass
     bases = bases or {}
     app = Flask(__name__, static_folder=str(ROOT / "static"), template_folder=str(ROOT / "templates"))
     app.secret_key = cfg["secret_key"]
@@ -58,9 +71,17 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
             return api_youtube.YouTube(access_token=tok, quota_cb=sync.quota_cb(store), base=api_base())
         return None
 
+    def owns(ch):
+        """True when the channel row belongs to the signed-in user (always, when auth is off)."""
+        if not cfg.get("require_login"):
+            return True
+        return bool(ch) and ch.get("user_id") == (session.get("uid") or 1)
+
     def channel_client(channel_id):
         ch = store.channel(channel_id)
-        if not ch or not ch.get("refresh_token"):
+        if not ch or not owns(ch):
+            raise tools.ToolError("Channel is not linked")
+        if not ch.get("refresh_token"):
             raise tools.ToolError("Channel is not linked")
         return ch, api_youtube.YouTube(access_token=tokens.get(ch), quota_cb=sync.quota_cb(store), base=api_base())
 
@@ -73,7 +94,7 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
         try:
             log("sync started")
             try:
-                planner.check_due(store, cfg)   # raise reminders for due content-plan items
+                planner.check_due_all(store, cfg)   # reminders for every user's content plan
             except Exception as e:
                 log(f"planner check failed: {e}")
             if only:
@@ -128,23 +149,206 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
         return resp
     app.sf["schedule_push"] = schedule_push
 
-    # ---------------------------------------------------------------- auth
+    # ---------------------------------------------------------------- auth + roles
+    def _current_email():
+        uid = session.get("uid")
+        if not uid:
+            return ""
+        u = store.get_user(uid)
+        return ((u or {}).get("email") or "").strip().lower()
+
+    def _admin_emails():
+        return {str(e).strip().lower() for e in (cfg.get("admin_emails") or []) if str(e).strip()}
+
+    def is_owner():
+        # local use (no login gate) → everyone is the owner
+        if not cfg.get("require_login"):
+            return True
+        uid = session.get("uid")
+        if not uid:
+            return False
+        oe = (cfg.get("owner_email") or "").strip().lower()
+        if oe and _current_email() == oe:
+            return True
+        return uid == 1
+
+    def is_admin():
+        return is_owner() or (_current_email() in _admin_emails())
+
+    def role_name():
+        return "owner" if is_owner() else ("admin" if is_admin() else "member")
+
+    # paid AI (Gemini) endpoints — owner + whitelist only, when ai_whitelist_only is on
+    # (the thumbnail generator is not in this list: every account gets a daily free allowance,
+    #  owner + whitelist are unlimited — see _thumb_allowance)
+    AI_PREFIXES = ("/api/strategy/chat", "/api/strategy/ideas", "/api/strategy/report",
+                   "/api/strategy/thumb", "/api/predict")
+
     @app.before_request
     def gate():
         if request.method == "OPTIONS":
             return _cors(("", 204))
         p = request.path
+        # extension API: each account's extension sends ITS OWN key (Settings -> Browser
+        # extension); the site-wide EXT_TOKEN still means the owner (uid 1)
         if p.startswith("/api/ext/"):
-            if request.headers.get("X-SF-Token") != cfg["ext_token"]:
+            tok = request.headers.get("X-SF-Token") or ""
+            ext_uid = 1 if (tok and cfg.get("ext_token") and secrets.compare_digest(tok, cfg["ext_token"])) \
+                else store.user_for_ext_token(tok)
+            if not ext_uid:
                 return _cors((jsonify({"ok": False, "error": "bad token"}), 401))
+            if p in ("/api/ext/probe", "/api/ext/markup") and ext_uid != 1:
+                return _cors((jsonify({"ok": False, "error": "owner only"}), 403))
+            g.ext_uid = ext_uid
+            store.set_uid(ext_uid)
+            thumbs.set_uid(ext_uid)
             return None
-        if not cfg.get("site_password"):
+        uid = session.get("uid")
+        # every request runs scoped to the signed-in user (owner=1 when auth is off)
+        store.set_uid(uid or 1)
+        thumbs.set_uid(uid or 1)
+        if not cfg.get("require_login"):
             return None
-        if any(p.startswith(o) for o in OPEN_PATHS) or session.get("auth"):
+        if uid or any(p == o.rstrip("/") or p.startswith(o) for o in OPEN_PATHS):
+            if cfg.get("ai_whitelist_only") and any(p == x or p.startswith(x) for x in AI_PREFIXES) and not is_admin():
+                return jsonify({"ok": False, "error": "This AI feature is limited to whitelisted accounts — ask the owner to add you.", "need_whitelist": True}), 403
             return None
         if p.startswith("/api/"):
             return jsonify({"error": "login required"}), 401
-        return None  # the SPA shows the login card itself
+        return None  # the SPA / phone app show the sign-in screen themselves
+
+    # ------------------------------------------------------- account sessions
+    def issue_session(uid):
+        session.clear()
+        session["uid"] = uid
+        store.set_uid(uid)
+        store.touch_login(uid)
+
+    def claim_or_create(email, fields):
+        """First real signup (or the configured owner_email) claims the placeholder owner
+        account so the operator keeps their linked channels; everyone else gets a fresh one."""
+        owner_email = (cfg.get("owner_email") or "").strip().lower()
+        if store.owner_unclaimed() and (not owner_email or (email or "").strip().lower() == owner_email):
+            return store.claim_owner(fields)
+        uid = store.create_user(fields)
+        moved = thumbs.prepare_new_user(uid)   # a fresh account never inherits a leftover u<id> folder
+        if moved:
+            log(f"[auth] new account uid={uid}: moved a leftover thumbnail folder to {moved}")
+        return uid
+
+    def oauth_upsert(info):
+        provider, sub = info.get("provider"), str(info.get("sub") or "")
+        if not sub:
+            return None
+        hit = store.user_by_provider(provider, sub)
+        if hit:
+            store.link_provider(hit["id"], provider, sub, info.get("avatar"))
+            return hit["id"]
+        email = info.get("email")
+        by_email = store.user_by_email(email) if email else None
+        if by_email:
+            store.link_provider(by_email["id"], provider, sub, info.get("avatar"))
+            return by_email["id"]
+        fields = {"email": email, "name": info.get("name"), "avatar": info.get("avatar"),
+                  "provider": provider, "provider_sub": sub}
+        return claim_or_create(email or "", fields)
+
+    def signin_redirect(provider):
+        base = (cfg.get("base_url") or f"http://127.0.0.1:{cfg['port']}").rstrip("/")
+        return f"{base}/auth/{provider}/cb"
+
+    @app.post("/api/auth/signup")
+    def auth_signup():
+        b = request.get_json(silent=True) or {}
+        email = (b.get("email") or "").strip()
+        pw = b.get("password") or ""
+        name = (b.get("name") or "").strip() or (email.split("@")[0] if "@" in email else "creator")
+        if not authn.valid_email(email):
+            return jsonify({"ok": False, "error": "Enter a valid email address."}), 400
+        if len(pw) < 8:
+            return jsonify({"ok": False, "error": "Use a password of at least 8 characters."}), 400
+        if store.user_by_email(email):
+            return jsonify({"ok": False, "error": "That email already has an account — sign in instead."}), 409
+        salt, h = authn.hash_password(pw)
+        uid = claim_or_create(email, {"email": email, "name": name, "pw_hash": h, "pw_salt": salt,
+                                      "provider": "password"})
+        issue_session(uid)
+        log(f"[auth] signup uid={uid} {email}")
+        return jsonify({"ok": True, "user": store.public_user(uid)})
+
+    @app.post("/api/auth/login")
+    def auth_login():
+        b = request.get_json(silent=True) or {}
+        email = (b.get("email") or "").strip()
+        pw = b.get("password") or ""
+        u = store.user_by_email(email)
+        if not u or not authn.verify_password(pw, u.get("pw_salt"), u.get("pw_hash")):
+            return jsonify({"ok": False, "error": "Wrong email or password."}), 403
+        issue_session(u["id"])
+        return jsonify({"ok": True, "user": store.public_user(u["id"])})
+
+    @app.post("/api/auth/logout")
+    def auth_logout():
+        session.clear()
+        return jsonify({"ok": True})
+
+    @app.get("/api/auth/me")
+    def auth_me():
+        uid = session.get("uid")
+        return jsonify({"user": store.public_user(uid) if uid else None,
+                        "providers": config.public_view(cfg)["auth"],
+                        "role": role_name(), "is_owner": is_owner(), "is_admin": is_admin(),
+                        "ai_whitelist_only": bool(cfg.get("ai_whitelist_only"))})
+
+    # ------------------------------------------------- sign in WITH Google / Discord
+    @app.get("/auth/google")
+    def auth_google():
+        if not authn.google_configured(cfg):
+            return "Google sign-in is not configured on this server.", 404
+        st = authn.new_state()
+        session["signin_state"] = st
+        return redirect(authn.google_auth_url(cfg, signin_redirect("google"), st))
+
+    @app.get("/auth/google/cb")
+    def auth_google_cb():
+        if not request.args.get("code") or request.args.get("state") != session.get("signin_state"):
+            return redirect("/?auth_error=google")
+        try:
+            info = authn.google_exchange(cfg, request.args["code"], signin_redirect("google"),
+                                         token_base=bases.get("google_signin_token_base"))
+            uid = oauth_upsert(info)
+        except Exception as e:
+            log(f"[auth] google exchange failed: {e}")
+            return redirect("/?auth_error=google")
+        if not uid:
+            return redirect("/?auth_error=google")
+        issue_session(uid)
+        return redirect("/")
+
+    @app.get("/auth/discord")
+    def auth_discord():
+        if not authn.discord_configured(cfg):
+            return "Discord sign-in is not configured on this server.", 404
+        st = authn.new_state()
+        session["signin_state"] = st
+        return redirect(authn.discord_auth_url(cfg, signin_redirect("discord"), st))
+
+    @app.get("/auth/discord/cb")
+    def auth_discord_cb():
+        if not request.args.get("code") or request.args.get("state") != session.get("signin_state"):
+            return redirect("/?auth_error=discord")
+        try:
+            info = authn.discord_exchange(cfg, request.args["code"], signin_redirect("discord"),
+                                          token_base=bases.get("discord_token_base"),
+                                          me_base=bases.get("discord_me_base"))
+            uid = oauth_upsert(info)
+        except Exception as e:
+            log(f"[auth] discord exchange failed: {e}")
+            return redirect("/?auth_error=discord")
+        if not uid:
+            return redirect("/?auth_error=discord")
+        issue_session(uid)
+        return redirect("/")
 
     def _cors(resp):
         r = app.make_response(resp)
@@ -159,14 +363,6 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
             resp.headers["Access-Control-Allow-Origin"] = "*"
             resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-SF-Token"
         return resp
-
-    @app.post("/api/login")
-    def login():
-        pw = (request.get_json(silent=True) or {}).get("password", "")
-        if cfg.get("site_password") and not secrets.compare_digest(pw, cfg["site_password"]):
-            return jsonify({"ok": False, "error": "wrong password"}), 403
-        session["auth"] = True
-        return jsonify({"ok": True})
 
     @app.post("/api/logout")
     def logout():
@@ -204,17 +400,29 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
     @app.get("/api/status")
     def status():
         pub = config.public_view(cfg)
-        pub["authed"] = bool(session.get("auth")) or not cfg.get("site_password")
+        uid = session.get("uid")
+        pub["authed"] = bool(uid) or not cfg.get("require_login")
+        pub["user"] = store.public_user(uid) if uid else None
         pub["hosted"] = hosted()
         pub["persistence"] = persist.status()
+        pub["role"] = role_name()
+        pub["is_owner"] = is_owner()
+        pub["is_admin"] = is_admin()
+        pub["ai_whitelist_only"] = bool(cfg.get("ai_whitelist_only"))
+        pub["thumbs_daily_free"] = int(cfg.get("thumbs_daily_free") or 0)
+        if is_owner():
+            pub["admin_emails"] = list(cfg.get("admin_emails") or [])
+        else:
+            # the site-wide extension token acts as the OWNER; everyone else gets their own key
+            pub.pop("ext_token", None)
+            if uid:
+                pub["ext_token"] = store.ext_token_for(uid)
         if pub["authed"]:
             pub["channels"] = len(store.channels())
             pub["quota_today"] = store.quota(sync.today())
             pub["last_sync"] = store.get_setting("last_sync")
             pub["sync_running"] = state["sync_running"]
             pub["alerts_open"] = len(store.alerts())
-        else:
-            pub.pop("ext_token", None)
         return jsonify(pub)
 
     @app.get("/api/log")
@@ -233,6 +441,8 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
 
     @app.delete("/api/channels/<cid>")
     def channel_delete(cid):
+        if not owns(store.channel(cid)):
+            return jsonify({"error": "unknown channel"}), 404
         store.delete_channel(cid)     # local only: the token stays valid for the schedule bot
         tokens.invalidate(cid)
         return jsonify({"ok": True})
@@ -240,6 +450,8 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
     @app.post("/api/sync")
     def api_sync():
         only = (request.get_json(silent=True) or {}).get("channel_id")
+        if only and not owns(store.channel(only)):
+            return jsonify({"started": False, "error": "unknown channel"}), 404
         if state["sync_running"]:
             return jsonify({"started": False, "running": True})
         threading.Thread(target=run_sync, args=(only,), daemon=True).start()
@@ -248,7 +460,10 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
     @app.post("/api/sync/now")
     def api_sync_now():
         """Synchronous sync (used by the selftest and the CLI)."""
-        res = run_sync((request.get_json(silent=True) or {}).get("channel_id"))
+        only = (request.get_json(silent=True) or {}).get("channel_id")
+        if only and not owns(store.channel(only)):
+            return jsonify({"result": None, "error": "unknown channel"}), 404
+        res = run_sync(only)
         return jsonify({"result": res})
 
     @app.get("/api/sync/status")
@@ -265,7 +480,7 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
     def channel_detail(cid):
         import sf.search as search_mod
         ch = store.channel(cid)
-        if not ch:
+        if not ch or not owns(ch):
             return jsonify({"error": "unknown channel"}), 404
         days = int(request.args.get("days", 28))   # 0 = lifetime
         ch["stats"] = json.loads(ch.pop("stats_json") or "{}")
@@ -321,6 +536,10 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
         store.dismiss_alert(aid)
         return jsonify({"ok": True})
 
+    @app.post("/api/alerts/dismiss-all")
+    def alert_dismiss_all():
+        return jsonify({"ok": True, "dismissed": store.dismiss_all_alerts()})
+
     @app.post("/api/alerts/deliver")
     def alerts_deliver():
         n = alerts_mod.deliver_discord(store, cfg.get("discord_webhook_url"))
@@ -375,11 +594,13 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
         return jsonify({"linked": ch["title"], "channel_id": ch["channel_id"]})
 
     # ------------------------------------------------------------ settings
-    EDITABLE = ("discord_webhook_url", "sync_minutes", "scan_per_channel", "analytics_days", "site_password",
+    EDITABLE = ("discord_webhook_url", "sync_minutes", "scan_per_channel", "analytics_days", "owner_email",
                 "youtube_api_key", "base_url")
 
     @app.post("/api/settings")
     def settings_save():
+        if cfg.get("require_login") and not is_owner():
+            return jsonify({"error": "Only the owner account can change server settings."}), 403
         body = request.get_json(silent=True) or {}
         file_cfg = {}
         if config.CONFIG_PATH.exists():
@@ -407,6 +628,64 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
             config.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
             config.CONFIG_PATH.write_text(json.dumps(file_cfg, indent=2), encoding="utf-8")
         return jsonify({"ok": True, "status": config.public_view(cfg)})
+
+    # ------------------------------------------------------- whitelist (owner only)
+    def _persist_cfg(updates):
+        file_cfg = {}
+        if config.CONFIG_PATH.exists():
+            try:
+                file_cfg = json.loads(config.CONFIG_PATH.read_text(encoding="utf-8-sig"))
+            except Exception:
+                file_cfg = {}
+        for k, v in updates.items():
+            cfg[k] = v
+            file_cfg[k] = v
+        try:
+            ov = store.get_setting("cfg:overrides") or {}
+            ov.update({k: v for k, v in updates.items() if k in OWNER_SETTINGS})
+            store.set_setting("cfg:overrides", ov)
+        except Exception:
+            pass
+        if not os.environ.get("SF_NO_PERSIST"):
+            config.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            config.CONFIG_PATH.write_text(json.dumps(file_cfg, indent=2), encoding="utf-8")
+
+    @app.get("/api/admin/whitelist")
+    def admin_whitelist_get():
+        if not is_owner():
+            return jsonify({"error": "Owner only."}), 403
+        return jsonify({"ok": True, "owner_email": cfg.get("owner_email") or "",
+                        "admin_emails": list(cfg.get("admin_emails") or []),
+                        "ai_whitelist_only": bool(cfg.get("ai_whitelist_only")),
+                        "thumbs_daily_free": int(cfg.get("thumbs_daily_free") or 0)})
+
+    @app.post("/api/admin/whitelist")
+    def admin_whitelist_set():
+        if not is_owner():
+            return jsonify({"error": "Owner only."}), 403
+        b = request.get_json(silent=True) or {}
+        emails = {str(e).strip().lower() for e in (cfg.get("admin_emails") or []) if str(e).strip()}
+        action = (b.get("action") or "").strip()
+        email = (b.get("email") or "").strip().lower()
+        if action == "add":
+            if not authn.valid_email(email):
+                return jsonify({"ok": False, "error": "Enter a valid email address."}), 400
+            emails.add(email)
+        elif action == "remove":
+            emails.discard(email)
+        upd = {"admin_emails": sorted(emails)}
+        if "ai_whitelist_only" in b:
+            upd["ai_whitelist_only"] = bool(b["ai_whitelist_only"])
+        if "thumbs_daily_free" in b:
+            try:
+                upd["thumbs_daily_free"] = max(0, min(1000, int(b["thumbs_daily_free"] or 0)))
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "error": "The daily thumbnail allowance must be a number."}), 400
+        _persist_cfg(upd)
+        log(f"[admin] whitelist {action or 'update'} {email} -> {len(emails)} admin(s)")
+        return jsonify({"ok": True, "admin_emails": sorted(emails),
+                        "ai_whitelist_only": bool(cfg.get("ai_whitelist_only")),
+                        "thumbs_daily_free": int(cfg.get("thumbs_daily_free") or 0)})
 
     # ---------------------------------------------------------- superchats
     @app.get("/api/channels/<cid>/superchats")
@@ -471,7 +750,6 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
         "monetization": lambda b: tools.monetization_check(b.get("video")),
         "keyword": lambda b: tools.keyword_analyzer(_yt_or_400(), b.get("keyword"), b.get("region") or None),
         "rank": lambda b: tools.rank_checker(_yt_or_400(), b.get("keyword"), b.get("target"), b.get("region") or None),
-        "tag-rank": lambda b: tools.tag_rank_checker(_yt_or_400(), b.get("video"), b.get("region") or None, int(b.get("max_tags", 15))),
         "sponsors": lambda b: tools.sponsor_locator(b.get("video")),
         "comment-picker": lambda b: tools.comment_picker(_yt_or_400(), b.get("video"), int(b.get("winners", 1)), int(b.get("min_likes", 0)),
                                                          bool(b.get("unique", True)), b.get("keyword") or None, b.get("seed") or None),
@@ -512,11 +790,15 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
         except Exception as e:
             return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
 
+    AI_TOOLS = {"tags", "ad-safety", "thumbnail-analyzer"}   # Gemini-powered → whitelist-gated
+
     @app.post("/api/tools/<name>")
     def run_tool(name):
         fn = TOOL_FUNCS.get(name)
         if not fn:
             return jsonify({"error": "unknown tool"}), 404
+        if name in AI_TOOLS and cfg.get("require_login") and cfg.get("ai_whitelist_only") and not is_admin():
+            return jsonify({"ok": False, "error": "This AI tool is limited to whitelisted accounts — ask the owner to add you.", "need_whitelist": True}), 403
         body = request.get_json(silent=True) or {}
         try:
             return jsonify({"ok": True, "result": fn(body)})
@@ -597,7 +879,7 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
     @app.get("/api/strategy/history")
     def strategy_history():
         return jsonify({"ok": True, "history": strategist.history(store), "pitched": strategist.pitched(store)[-60:],
-                        "notes": strategist.notes(store), "queries": store.get_setting(radar.QUERIES_KEY) or [],
+                        "notes": strategist.notes(store), "queries": store.get_user_setting(radar.QUERIES_KEY) or [],
                         "auto_queries": radar.niche_queries(store), "radar": radar.stats(store)})
 
     @app.post("/api/strategy/reset")
@@ -614,9 +896,9 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
             q = b.get("queries") or []
             if isinstance(q, str):
                 q = _re.split(r"[\n,]+", q)
-            store.set_setting(radar.QUERIES_KEY, [str(x).strip() for x in q if str(x).strip()][:12])
+            store.set_user_setting(radar.QUERIES_KEY, [str(x).strip() for x in q if str(x).strip()][:12])
         return jsonify({"ok": True, "notes": strategist.notes(store),
-                        "queries": store.get_setting(radar.QUERIES_KEY) or []})
+                        "queries": store.get_user_setting(radar.QUERIES_KEY) or []})
 
     # ---- the outlier radar (network feed = store, niche feed = YouTube Data API)
     state.setdefault("radar_running", False)
@@ -632,7 +914,7 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
     def strategy_radar():
         return jsonify({"ok": True, "radar": _radar_slim(radar.latest(store)), "running": state["radar_running"],
                         "stats": radar.stats(store), "auto_queries": radar.niche_queries(store),
-                        "queries": store.get_setting(radar.QUERIES_KEY) or [],
+                        "queries": store.get_user_setting(radar.QUERIES_KEY) or [],
                         "has_client": public_client() is not None})
 
     def run_radar(queries, days, niche, formats=("long",)):
@@ -703,7 +985,8 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
         if path:   # a local video file on this machine (best for multi-GB recordings)
             return _gemini_guard(lambda: predict.predict_video(cfg, path, b.get("title", "")))
         return _gemini_guard(lambda: predict.predict(cfg, public_client(), b.get("source", ""),
-                                     b.get("script", ""), b.get("title", ""), int(b.get("duration_s") or 0)))
+                                     b.get("script", ""), b.get("title", ""), int(b.get("duration_s") or 0),
+                                     store=store, tokens=tokens))
 
     @app.post("/api/predict/upload")
     def api_predict_upload():
@@ -725,11 +1008,27 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
                 pass
 
     # ------------------------------------------------------- STUDIO: thumbnail generator
+    # Public use: the owner and whitelisted accounts generate without limit; every other signed-in
+    # account gets `thumbs_daily_free` generations a day (UTC), counted per account. 0 = whitelist only.
+    def _thumb_used_today():
+        rec = store.get_user_setting("thumbs:used") or {}
+        return int(rec.get("n") or 0) if rec.get("day") == time.strftime("%Y-%m-%d", time.gmtime()) else 0
+
+    def _thumb_allowance():
+        """{"limit": n or None (unlimited), "used": n, "left": n or None}"""
+        used = _thumb_used_today()
+        if not cfg.get("require_login") or is_admin():
+            return {"limit": None, "used": used, "left": None}
+        limit = max(0, int(cfg.get("thumbs_daily_free") or 0))
+        return {"limit": limit, "used": used, "left": max(0, limit - used)}
+
     @app.get("/api/thumbs")
     def thumbs_index():
         return jsonify({"ok": True, "gemini": bool(cfg.get("gemini_api_key")),
                         "styles": [{"id": k, "name": v["name"], "desc": v["desc"]} for k, v in thumbs.STYLES.items()],
-                        "refs": thumbs.list_refs(), "outputs": thumbs.list_outputs()})
+                        "refs": thumbs.list_refs(), "outputs": thumbs.list_outputs(),
+                        "allowance": _thumb_allowance(),
+                        "limits": {"ref_mb": thumbs.MAX_REF_BYTES // (1024 * 1024), "per_kind": thumbs.MAX_REFS_PER_KIND}})
 
     @app.post("/api/thumbs/ref")
     def thumbs_add_ref():
@@ -742,26 +1041,60 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
             data = b""
         if not data:
             return jsonify({"ok": False, "error": "no image"}), 400
-        return jsonify({"ok": True, "ref": thumbs.save_ref(b["kind"], data, b.get("mime", "image/png"))})
+        try:
+            return jsonify({"ok": True, "ref": thumbs.save_ref(b["kind"], data, b.get("mime", "image/png"))})
+        except thumbs.RefError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
 
     @app.delete("/api/thumbs/ref/<kind>/<rid>")
     def thumbs_del_ref(kind, rid):
+        if kind not in thumbs.REF_KINDS or not _re.fullmatch(r"[0-9a-f]{6,32}", rid or ""):
+            return jsonify({"ok": False, "error": "bad reference"}), 400
         return jsonify({"ok": thumbs.delete_ref(kind, rid)})
 
     @app.post("/api/thumbs/generate")
     def thumbs_generate():
         b = request.get_json(silent=True) or {}
-        return _gemini_guard(lambda: thumbs.generate(cfg, b.get("style", "mrbeast"), b.get("subject", ""),
-                                     b.get("text", ""), b.get("extra", ""), b.get("refs") or []))
+        allow = _thumb_allowance()
+        if allow["limit"] is not None and allow["left"] <= 0:
+            if allow["limit"] == 0:
+                msg = "The thumbnail generator is limited to whitelisted accounts. Ask the owner to add you."
+            else:
+                msg = (f"You've used your {allow['limit']} free thumbnails for today. "
+                       f"They reset at midnight UTC.")
+            return jsonify({"ok": False, "error": msg, "allowance": allow}), 429
+        resp = _gemini_guard(lambda: thumbs.generate(cfg, b.get("style", "mrbeast"), b.get("subject", ""),
+                                                     b.get("text", ""), b.get("extra", ""), b.get("refs") or []))
+        ok = not isinstance(resp, tuple) and resp.status_code == 200 and (resp.get_json(silent=True) or {}).get("ok")
+        if ok:
+            store.set_user_setting("thumbs:used", {"day": time.strftime("%Y-%m-%d", time.gmtime()),
+                                                   "n": _thumb_used_today() + 1})
+            body = resp.get_json()
+            body["allowance"] = _thumb_allowance()
+            return jsonify(body)
+        return resp
 
     @app.post("/api/thumbs/import")
     def thumbs_import():
+        """Import a channel's look (avatar + banner + top thumbnails) as references: a tracked
+        channel of this account from the store (free), or ANY channel by @handle / URL / UC id
+        through the public Data API (~3 quota units)."""
         b = request.get_json(silent=True) or {}
-        cid = b.get("channel_id")
-        if not cid:
-            return jsonify({"ok": False, "error": "pick a channel"}), 400
+        ref = (b.get("channel") or b.get("channel_id") or "").strip()
+        if not ref:
+            return jsonify({"ok": False, "error": "Paste your channel's @handle or link."}), 400
         try:
-            return jsonify({"ok": True, **thumbs.import_from_channel(store, cid)})
+            ch = store.channel(ref)
+            if ch and owns(ch):
+                return jsonify({"ok": True, **thumbs.import_from_channel(store, ref)})
+            yt = public_client()
+            if yt is None:
+                return jsonify({"ok": False, "error": "Channel import needs a YouTube API key in Settings."}), 400
+            return jsonify({"ok": True, **thumbs.import_from_public(yt, ref)})
+        except thumbs.RefError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+        except http.HttpError as e:
+            return jsonify({"ok": False, "error": e.message or str(e)}), 502
         except Exception as e:
             return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
 
@@ -769,11 +1102,11 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
     def thumbs_ref_file(kind, name):
         if kind not in thumbs.REF_KINDS:
             return "", 404
-        return send_from_directory(str(thumbs.REFS_DIR / kind), name)
+        return send_from_directory(str(thumbs.refs_root() / kind), name)
 
     @app.get("/thumbs/out/<name>")
     def thumbs_out_file(name):
-        return send_from_directory(str(thumbs.OUT_DIR), name)
+        return send_from_directory(str(thumbs.out_dir()), name)
 
     # ------------------------------------------------------- content planner (personal)
     @app.get("/api/plan")
@@ -860,14 +1193,14 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
 
     @app.get("/api/ledger")
     def ledger_get():
-        led = store.get_setting("ledger")
+        led = store.get_user_setting("ledger")
         if not isinstance(led, dict) or not isinstance(led.get("groups"), list):
             led = _ledger_seed()
-            store.set_setting("ledger", led)
+            store.set_user_setting("ledger", led)
         else:
             led, changed = _ledger_migrate(led)
             if changed:
-                store.set_setting("ledger", led)
+                store.set_user_setting("ledger", led)
         return jsonify({"ok": True, "ledger": led})
 
     @app.post("/api/ledger")
@@ -878,10 +1211,56 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
             return jsonify({"ok": False, "error": "ledger.groups required"}), 400
         if len(led["groups"]) > 40 or sum(len(g.get("rows", [])) for g in led["groups"] if isinstance(g, dict)) > 2000:
             return jsonify({"ok": False, "error": "ledger too large"}), 400
-        store.set_setting("ledger", led)
+        store.set_user_setting("ledger", led)
         return jsonify({"ok": True})
 
     # ----------------------------------------------------------- extension
+    def _ext_spend(units):
+        """Extension lookups spend the site's YouTube quota. The owner is unlimited; every other
+        account's extension gets `ext_daily_units` of UNCACHED lookups a day (cached answers are free)."""
+        uid = getattr(g, "ext_uid", 1)
+        if uid == 1:
+            return True
+        day = time.strftime("%Y-%m-%d", time.gmtime())
+        rec = store.get_user_setting("ext_units", user_id=uid) or {}
+        used = int(rec.get("n") or 0) if rec.get("day") == day else 0
+        if used + units > int(cfg.get("ext_daily_units") or 0):
+            return False
+        store.set_user_setting("ext_units", {"day": day, "n": used + units}, user_id=uid)
+        return True
+
+    @app.delete("/api/account")
+    def account_delete():
+        """Delete the signed-in account and its data (channels, alerts, plans, thumbnails, keys)."""
+        uid = session.get("uid")
+        if not uid:
+            return jsonify({"ok": False, "error": "sign in first"}), 401
+        if is_owner():
+            return jsonify({"ok": False, "error": "The owner account can't be deleted from here."}), 400
+        b = request.get_json(silent=True) or {}
+        if str(b.get("confirm") or "").strip().upper() != "DELETE":
+            return jsonify({"ok": False, "error": "Type DELETE to confirm."}), 400
+        store.delete_user(uid)
+        import shutil
+        shutil.rmtree(config.DATA / "thumbs" / f"u{int(uid)}", ignore_errors=True)
+        log(f"[auth] account deleted uid={uid}")
+        session.clear()
+        return jsonify({"ok": True})
+
+    @app.post("/api/ext-token/rotate")
+    def ext_token_rotate():
+        """A new personal extension key for the signed-in account (the old one stops working)."""
+        uid = session.get("uid")
+        if not uid:
+            return jsonify({"ok": False, "error": "sign in first"}), 401
+        if is_owner():
+            return jsonify({"ok": False, "error": "The owner key is the site's EXT_TOKEN setting."}), 400
+        return jsonify({"ok": True, "ext_token": store.rotate_ext_token(uid)})
+
+    @app.get("/privacy")
+    def privacy():
+        return render_template("privacy.html", app_name=config.APP_NAME, base_url=cfg.get("base_url") or "", owner_email=cfg.get("owner_email") or "")
+
     @app.get("/api/ext/ping")
     def ext_ping():
         return jsonify({"ok": True, "app": config.APP_NAME, "version": config.APP_VERSION,
@@ -905,6 +1284,15 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
                 out[i] = hit
             else:
                 need_i.append(i)
+        if need_h:
+            allowed = [h for h in need_h if _ext_spend(1)]
+            for h in need_h:
+                if h not in allowed:
+                    out[h] = {"limited": True}
+            need_h = allowed
+        if need_i and not _ext_spend(1):
+            out.update({i: {"limited": True} for i in need_i})
+            need_i = []
         yt = public_client() if (need_h or need_i) else None
         if yt:
             for h in need_h:
@@ -940,14 +1328,54 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
         if not isinstance(idents, list):
             return jsonify({"ok": False, "error": "channels must be a list"}), 400
         idents = [str(x).strip() for x in idents if str(x).strip()][:40]
-        yt = public_client()
         out = {}
+        need = []
         for ident in idents:
+            hit = search_mod.baseline_cached(store, ident)
+            if hit is not None:
+                out[ident] = hit
+            elif _ext_spend(3):
+                need.append(ident)
+            else:
+                out[ident] = {"limited": True}
+        yt = public_client()
+
+        def one(ident):
             try:
-                out[ident] = search_mod.channel_baseline(store, yt, ident)
+                return ident, search_mod.channel_baseline(store, yt, ident)
             except Exception:
-                out[ident] = {"error": True}
+                return ident, {"error": True}
+
+        # an uncached channel is ~3 sequential Data API calls; doing a batch in parallel is what
+        # lets the badges appear in a second or two instead of a minute per 40 channels
+        from concurrent.futures import ThreadPoolExecutor
+        if need:
+            with ThreadPoolExecutor(max_workers=6) as ex:
+                out.update(dict(ex.map(one, need)))
         return jsonify({"baselines": out})
+
+    @app.post("/api/ext/video")
+    def ext_video():
+        """Per-video report for the watch-page panel: the video's numbers, the channel
+        overview, its 1..10 placement for the channel, outlier multiple and an estimated
+        revenue band. Body: {"videoId": "...", "channelId": "UC..."?}."""
+        import sf.search as search_mod
+        body = request.get_json(silent=True) or {}
+        vid = str(body.get("videoId") or body.get("video_id") or "").strip()
+        cid = str(body.get("channelId") or body.get("channel_id") or "").strip() or None
+        if not vid:
+            return jsonify({"ok": False, "error": "videoId required"}), 400
+        if not _ext_spend(4):
+            return jsonify({"ok": False, "error": "daily_limit"}), 429
+        yt = public_client()
+        try:
+            rep = search_mod.video_report(store, yt, vid, channel_id=cid)
+        except Exception as e:
+            log(f"[ext] video report failed for {vid}: {e}")
+            return jsonify({"ok": False, "error": "lookup_failed"}), 500
+        if not rep:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        return jsonify({"ok": True, **rep})
 
     @app.post("/api/dev/markup")
     def dev_markup():
@@ -959,6 +1387,24 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
         label = str(body.get("label") or "control")[:60]
         try:
             (config.DATA / "ext_markup.txt").write_text(f"# {label}\n{m}\n", encoding="utf-8")
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": True, "len": len(m)})
+
+    @app.post("/api/ext/markup")
+    def ext_markup():
+        """The extension's Ad Placer posts the STRUCTURE of Studio's ad-slot editor here (tags,
+        classes, labels, slot times — no other page text) when it can't act on it, so the
+        selectors can be fixed without a copy-paste round trip. Appends to data/ext_markup.txt."""
+        body = request.get_json(silent=True) or {}
+        m = str(body.get("markup") or "")[:120000]
+        label = _re.sub(r"[^\w .:-]", "", str(body.get("label") or "control"))[:60]
+        try:
+            path = config.DATA / "ext_markup.txt"
+            if path.exists() and path.stat().st_size > 2_000_000:
+                path.write_text("", encoding="utf-8")
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(f"# {label} @ {time.strftime('%Y-%m-%d %H:%M:%S')}\n{m}\n\n")
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 500
         return jsonify({"ok": True, "len": len(m)})
@@ -1055,5 +1501,5 @@ if __name__ == "__main__":
     cfg = config.load()
     application = create_app(cfg, start_background=True)
     print(f"{config.APP_NAME} v{config.APP_VERSION} on http://127.0.0.1:{cfg['port']}  "
-          f"(login {'ON' if cfg['site_password'] else 'off'}, google client {'ok' if cfg['google']['client_id'] else 'MISSING'})")
+          f"(login {'required' if cfg.get('require_login') else 'off'}, google client {'ok' if cfg['google']['client_id'] else 'MISSING'})")
     application.run(host="127.0.0.1", port=int(cfg["port"]), debug=False, threaded=True)

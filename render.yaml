@@ -1,6 +1,6 @@
 # Render blueprint for CreatorHaven — New + Blueprint on render.com, or create the web service
-# by hand with the same values. The extension keeps talking to the LOCAL site; this is the
-# hosted dashboard/brain/ledger.
+# by hand with the same values. This is the PUBLIC site: accounts are required, the account
+# with OWNER_EMAIL is the owner, and the browser extension talks to it by default.
 services:
   - type: web
     name: creatorhaven
@@ -16,8 +16,10 @@ services:
         generateValue: true
       - key: EXT_TOKEN
         generateValue: true
-      - key: SITE_PASSWORD
-        sync: false            # set in the dashboard: the login gate
+      - key: REQUIRE_LOGIN
+        value: "true"          # public site: every visitor signs in to their own account
+      - key: OWNER_EMAIL
+        sync: false            # set in the dashboard: ONLY the sign-up with this email becomes the owner
       - key: GEMINI_API_KEY
         sync: false            # strategy brain, predictor, thumbnail review/generator
       - key: YOUTUBE_API_KEY
