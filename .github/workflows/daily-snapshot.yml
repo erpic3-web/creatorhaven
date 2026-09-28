@@ -1,0 +1,25 @@
+# Wakes the hosted CreatorHaven once a day so it reads every followed channel's public counters.
+# Render's free instance sleeps when idle; a missed day leaves a gap that later windows have to
+# interpolate across. The endpoint runs its job at most once per UTC day, so retries are harmless.
+# GitHub pauses scheduled workflows after 60 days without a commit to the repo: re-enable it under
+# Actions if that happens.
+name: Daily snapshot
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake the site and take the day's readings
+        run: |
+          for attempt in 1 2 3 4; do
+            if curl -fsS --max-time 120 https://creatorhaven.onrender.com/api/cron/daily; then
+              echo; exit 0
+            fi
+            sleep 45
+          done
+          exit 1
