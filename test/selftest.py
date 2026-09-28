@@ -4,6 +4,7 @@ plus a network guard that fails any request to a non-loopback host.
 
     python test/selftest.py
 """
+import base64
 import json
 import os
 import sys
@@ -23,7 +24,7 @@ except Exception:
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from sf import alerts, api_analytics, api_youtube, gemini, innertube, metrics, oauth, sync, tools  # noqa: E402
+from sf import alerts, api_analytics, api_youtube, config as sfconfig, gemini, innertube, metrics, oauth, sync, tools  # noqa: E402
 from sf.store import Store  # noqa: E402
 import app as app_module  # noqa: E402
 
@@ -57,7 +58,7 @@ VID = lambda i, **kw: dict({  # noqa: E731
     "status": {"privacyStatus": "public", "uploadStatus": "processed", "madeForKids": False},
     "contentDetails": {"duration": "PT12M3S"}, "statistics": {"viewCount": "1000", "likeCount": "50", "commentCount": "7"}}, **kw)
 
-STATE = {"videos": {}, "calls": [], "analytics_403": None, "engaged_400": False, "strategy_prompts": []}
+STATE = {"videos": {}, "calls": [], "analytics_403": None, "engaged_400": False, "strategy_prompts": [], "predict_prompts": []}
 
 
 def make_videos():
@@ -125,6 +126,14 @@ class Mock(BaseHTTPRequestHandler):
                 sc = " ".join(oauth.scopes_for(None)) if form["refresh_token"] == "rt-1" else oauth.SCOPE_READONLY
                 return self._send({"access_token": "at-" + form["refresh_token"], "expires_in": 3600, "scope": sc})
             return self._send({"error": "invalid_grant"}, 400)
+        if u.path == "/gsi/token":            # "log in with Google" token exchange
+            payload = base64.urlsafe_b64encode(json.dumps(
+                {"sub": "g-123", "email": "guser@gmail.com", "name": "G User",
+                 "picture": "https://x/pic.png"}).encode()).rstrip(b"=").decode()
+            jwt = "eyJ.".rstrip(".") + "." + payload + ".sig"
+            return self._send({"id_token": jwt, "access_token": "gat"})
+        if u.path == "/discord/token":        # "log in with Discord" token exchange
+            return self._send({"access_token": "dtok", "token_type": "Bearer"})
         if u.path == "/youtube/v3/videos":   # update
             payload = json.loads(body)
             v = STATE["videos"].get(payload["id"])
@@ -155,6 +164,15 @@ class Mock(BaseHTTPRequestHandler):
                     text = ("Here's one built on the big one:\n**The 100 Night Ladder**\n[thumb:vid00000008]\nHook: cold open.\n\n"
                             "[[pitched: The 100 Night Ladder | Second Title]]")
                 return self._send({"candidates": [{"content": {"parts": [{"text": text}]}}]})
+            if "retention analyst" in prompt:
+                STATE["predict_prompts"].append(prompt)
+                text = json.dumps({"hook_score": 7, "avd_pct": 42, "predicted_score": 71, "confidence": "medium", "verdict": "solid",
+                                   "curve": [{"pct": 0, "retention": 100}, {"pct": 5, "retention": 80}, {"pct": 50, "retention": 45}, {"pct": 100, "retention": 20}],
+                                   "drop_offs": [{"pct": 8, "reason": "slow intro"}], "replays": [{"pct": 60, "reason": "twist", "strength": 2}],
+                                   "notes": [{"t": 12, "type": "cut", "note": "trim"}, {"t": 3, "type": "hook", "note": "faster"}],
+                                   "summary": "ok", "fixes": ["cut intro"], "views_multiple": [0.5, 2.0],
+                                   "packaging": {"titles": ["A"], "thumbnails": [{"subject": "face", "text": "NO", "colours": "red"}, "plain concept"]}})
+                return self._send({"candidates": [{"content": {"parts": [{"text": text}]}}]})
             if "tags" in prompt and "YouTube tags" in prompt:
                 text = json.dumps({"tags": ["minecraft horror", "scary minecraft", "analog horror"] * 2, "title_keywords": ["minecraft"], "note": "ok"})
             elif "advertiser" in prompt:
@@ -180,6 +198,9 @@ class Mock(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
+        if u.path == "/discord/me":
+            return self._send({"id": "d-777", "username": "erikd", "global_name": "Erik D",
+                               "email": "erikd@discord.test", "avatar": "abcavatar"})
         q = dict(urllib.parse.parse_qsl(u.query))
         auth = self.headers.get("Authorization", "")
         STATE["calls"].append(("GET", u.path, auth))
@@ -270,13 +291,19 @@ def start_mock():
 def main():
     srv, base = start_mock()
     tmp = Path(tempfile.mkdtemp())
-    cfg = {"site_password": "pw", "secret_key": "k" * 32, "port": 5999, "base_url": "http://127.0.0.1:5999",
+    sfconfig.DATA = tmp / "data"; sfconfig.DATA.mkdir(parents=True, exist_ok=True)  # keep thumbs/etc. off the real data dir
+    cfg = {"site_password": "", "require_login": True, "owner_email": "", "secret_key": "k" * 32,
+           "port": 5999, "base_url": "http://127.0.0.1:5999",
            "database": str(tmp / "t.sqlite3"), "gemini_api_key": "gem", "youtube_api_key": "",
            "google": {"client_id": "cid", "client_secret": "csec", "client_type": "desktop"},
+           "google_signin": {"client_id": "gsi-id", "client_secret": "gsi-sec"},
+           "discord_oauth": {"client_id": "disc-id", "client_secret": "disc-sec"},
            "discord_webhook_url": f"{base}/hook", "scan_per_channel": 200, "analytics_days": 30, "sync_minutes": 0,
            "ext_token": "ext-secret"}
     bases = {"api_base": f"{base}/youtube/v3", "analytics_base": f"{base}/analytics/v2", "token_base": base,
-             "auth_base": f"{base}/auth"}
+             "auth_base": f"{base}/auth",
+             "google_signin_token_base": f"{base}/gsi/token",
+             "discord_token_base": f"{base}/discord/token", "discord_me_base": f"{base}/discord/me"}
     gemini.BASE = f"{base}/gemini/v1beta"
     tools.SPONSORBLOCK = f"{base}/sponsorblock/api/skipSegments"
     tools.THUMB_BASE = f"{base}/thumbs"
@@ -365,24 +392,93 @@ def main():
     check("window_views = residual-inclusive channel-wide views", _rv["views"] == 250000 and _rv["views_source"] == "channel_wide")
     check("no window delta -> residual decay estimate", metrics.public_window_stats(_all, days=28, now=_now)["views_source"] == "estimated")
     # residual decay model, calibrated to two real Studio curves
+    from datetime import timedelta as _td
     check("residual: fresh video (age<window) counts its whole total",
           metrics.video_window_views(40000, 5, 28, 8.0) == 40000)
-    _arlo = metrics.video_window_views(2_909_414, 307, 28, 19.0)     # real last-28d ~17,790
-    check("residual: Arlo banger last-28d ~= 17k", 14000 <= _arlo <= 22000)
-    _flop = metrics.video_window_views(24_933, 115, 28, 0.35)        # real last-28d ~5,000
-    check("residual: flop last-28d flatter/larger share", 2500 <= _flop <= 6500)
-    check("residual: banger front-loads more than flop (less residual share)",
-          _arlo / 2_909_414 < _flop / 24_933)
-    # back-catalogue damping calibrated to two real channels (fast uploader keeps more back-catalogue
-    # than a slow one, whose un-sampled videos are older/deader); monotonic decreasing in reach
-    check("residual: back-damp calibration points (pixii ~0.85, erik ~0.31)",
-          abs(metrics._back_damp(70) - 0.849) < 0.02 and abs(metrics._back_damp(312) - 0.308) < 0.02)
-    check("residual: back-damp falls with sample reach, clamped",
-          metrics._back_damp(0) >= metrics._back_damp(200) >= metrics._back_damp(1000) == 0.25)
-    _cwv = metrics.channel_window_views(
-        [{"video_id": "x", "views": 500000, "published_at": "2026-01-01T00:00:00Z", "is_short": 0, "privacy": "public"}],
-        28, now=_now, outlier_by_id={"x": 25.0})
-    check("channel_window_views returns parts", "views" in _cwv and _cwv["views"] > 0 and "boost" in _cwv)
+    check("decay shape is a normalised cumulative curve",
+          metrics.shape_cum(0) == 0 and 0 < metrics.shape_cum(1) < metrics.shape_cum(28) < metrics.shape_cum(365)
+          < metrics.shape_cum(7400) <= 1.0001 and abs(metrics.shape_cum(7400) - 1) < 0.01)
+    _sh = lambda d: metrics.shape_cum(d) / metrics.shape_cum(300)
+    check("shape: a long-form upload gets 30-75% of its first-year views in month one and >85% by month six (real daily curves)",
+          0.3 < _sh(28) < 0.75 and 0.85 < _sh(182) < 0.99)
+    _ss = lambda d: metrics.shape_cum(d, is_short=1) / metrics.shape_cum(300, is_short=1)
+    check("shape: Shorts burst earlier than long-form", _ss(7) > _sh(7) * 0.9 and 0 < _ss(28) <= 1)
+    check("shape: a 15-month-old upload still gets a slice of its views in the last year, a 6-year-old very little",
+          0.05 < metrics.video_window_views(1.0, 450, 365) < 0.6 and metrics.video_window_views(1.0, 2100, 365) < 0.05)
+    check("shape: a bigger outlier keeps a heavier evergreen tail",
+          metrics.video_window_views(1.0, 800, 365, outlier=30) > metrics.video_window_views(1.0, 800, 365, outlier=1) > metrics.video_window_views(1.0, 800, 365, outlier=0.1))
+    _ctxA = metrics.catalog_context([{"video_id": "a", "views": 1000, "is_short": 0, "published_at": "2026-01-01T00:00:00Z"}] * 3, {"subscribers": 100000}, _now)
+    _ctxB = metrics.catalog_context([{"video_id": "a", "views": 1000, "is_short": 0, "published_at": "2026-01-01T00:00:00Z"}] * 3, {"subscribers": 100}, _now)
+    check("context: discovery-driven channels (high views per sub) get a heavier plateau", _ctxB["mp"][0] > _ctxA["mp"][0] and _ctxA["cadence"] == 0.1)
+    _ctxC = metrics.catalog_context([{"video_id": f"c{i}", "views": 1000, "is_short": 0, "published_at": (_now - _td(days=i)).strftime("%Y-%m-%dT%H:%M:%SZ")} for i in range(60)], None, _now)
+    check("context: frequent uploaders get a lighter evergreen tail", _ctxC["me_ch"] < _ctxA["me_ch"] and _ctxC["cadence"] > 4)
+    _l, _t = metrics.video_daily_slices(1000, 100, 91)
+    check("daily slices split launch/tail and sum to the window slice",
+          abs(sum(_l) + sum(_t) - metrics.video_window_views(1000, 100, 91)) < 1e-6 and sum(_l) > 0 and sum(_t) > 0
+          and all(x == 0 for x in _l[:40]))
+    _cat = [{"video_id": f"c{i}", "published_at": (_now - _td(days=age)).strftime("%Y-%m-%dT%H:%M:%SZ"), "views": 10000,
+             "privacy": "public", "is_short": 0} for i, age in enumerate((5, 40, 100, 400, 1500))]
+    _w = metrics.channel_view_windows(_cat, [("28d", 28), ("1yr", 365)], now=_now)
+    _ctx = metrics.catalog_context(_cat, None, _now)
+    check("channel windows = sum of per-upload slices (model)",
+          _w["28d"]["method"] == "model" and abs(_w["28d"]["views"] - sum(metrics.video_window_views(10000, a, 28, ctx=_ctx) for a in (5, 40, 100, 400, 1500))) <= 1
+          and _w["1yr"]["views"] > _w["28d"]["views"] and _w["28d"]["sample"] == 5)
+    _rows = [{"day": (_now - _td(days=d)).strftime("%Y-%m-%d"), "views": 1000000 - d * 10000} for d in (0, 1, 2, 3, 5, 8)]
+    _m = metrics.measured_from_snapshots(_rows, [("28d", 28), ("7d", 7)])
+    check("snapshots -> measured span + exact per-window deltas (interpolated between snapshot days)",
+          _m["days"] == 8 and _m["views"] == 80000 and _m["per_window"] == {7: 70000.0} and not _m["trimmed"])
+    _lumpy = metrics.measured_from_snapshots(_rows[:-1] + [{"day": _rows[-1]["day"], "views": _rows[-1]["views"] - 300000}], [("7d", 7)])
+    check("a lumpy channel-total update (one 300K day) is trimmed out of the calibration rate",
+          _lumpy["trimmed"] and _lumpy["raw_views"] == 380000 and 60000 <= _lumpy["views"] <= 90000)
+    _wb = metrics.channel_view_windows(_cat, [("7d", 7), ("28d", 28)], now=_now, measured=_m)
+    check("a window the snapshots cover is measured exactly", _wb["7d"]["method"] == "measured" and _wb["7d"]["views"] == 70000)
+    # dormant channels (no upload for 180+ days): fitted on K9's Studio export, see sf/metrics.py
+    _iso = lambda age: (_now - _td(days=age)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _dcat = [{"video_id": f"d{i}", "published_at": _iso(age), "views": 100000, "privacy": "public", "is_short": sh}
+             for i, (age, sh) in enumerate([(400, 0), (600, 0), (800, 0), (500, 1), (700, 1)])]
+    _dctx = metrics.catalog_context(_dcat, None, _now)
+    _actx = metrics.catalog_context(_dcat + [{"video_id": "fresh", "published_at": _iso(10), "views": 100000,
+                                              "privacy": "public", "is_short": 0}], None, _now)
+    check("a channel with no upload for 180+ days is dormant, one that uploaded 10 days ago is not",
+          _dctx["dormant"] and _dctx["days_since_upload"] == 400 and not _actx["dormant"])
+    _dl, _al = (metrics.video_window_views(100000, 800, 28, is_short=0, ctx=x) for x in (_dctx, _actx))
+    _ds, _as = (metrics.video_window_views(100000, 700, 28, is_short=1, ctx=x) for x in (_dctx, _actx))
+    check("dormant: old long-form keeps more of its views, old Shorts far fewer (K9 export)", _dl > _al and _ds < _as * 0.5)
+    check("dormant windows report the regime", metrics.channel_view_windows(_dcat, [("28d", 28)], now=_now)["28d"]["context"]["dormant"])
+    # "only N scheduled" needs a scan that can SEE scheduled uploads (the channel's own token)
+    _sch = {"channel_id": "UCstock", "title": "Stock"}
+    _sv = [{"video_id": "sv1", "privacy": "public", "views": 5}]
+    _a_pub, _ = alerts.scan_channel(store, _sch, _sv, {"videos": {}}, sees_private=False)
+    _a_tok, _ = alerts.scan_channel(store, _sch, _sv, {"videos": {}}, sees_private=True)
+    check("'only N scheduled' never fires on public data, still fires through the channel's token",
+          not any(a["kind"] == "low_stock" for a in _a_pub) and any(a["kind"] == "low_stock" for a in _a_tok))
+    store.add_alert({"key": "stock:UCstock:2026-09-09", "kind": "low_stock", "channel_id": "UCstock", "title": "Stock: only 0 scheduled"})
+    check("start-up cleanup dismisses the blind 'only 0 scheduled' alerts",
+          alerts.retire_blind_stock_alerts(store) == 1 and not any(a["kind"] == "low_stock" for a in store.alerts()))
+    _burst = metrics.channel_view_windows(_cat, [("28d", 28)], now=_now, measured=dict(_m, views=12000, per_window={}))
+    check("a burst week (launches over half the measured span) does not calibrate the tail", _burst["28d"]["method"] == "model" and _burst["28d"]["tail_k"] is None)
+    check("a longer window blends the measured span with a tail-calibrated model",
+          _wb["28d"]["method"] == "blend" and _wb["28d"]["tail_k"] is not None and _wb["28d"]["views"] >= 8000)
+    _cwv = metrics.channel_window_views(_cat, 28, now=_now, total_videos=40, lifetime_views=10_000_000, channel_age_days=3000)
+    check("channel_window_views returns parts", "views" in _cwv and _cwv["views"] > 0 and "boost" in _cwv and _cwv["back_catalog"] > 0)
+    _vrows = [{"video_id": "c2", "day": (_now - _td(days=d)).strftime("%Y-%m-%d"), "views": 9000 + d * 10} for d in (0, 4, 8)] \
+        + [{"video_id": "c3", "day": _now.strftime("%Y-%m-%d"), "views": 5}] \
+        + [{"video_id": "c4", "day": (_now - _td(days=3)).strftime("%Y-%m-%d"), "views": 5}, {"video_id": "c4", "day": (_now - _td(days=9)).strftime("%Y-%m-%d"), "views": 1}]
+    _mv = metrics.measured_videos_from_snapshots(_vrows, _now.strftime("%Y-%m-%d"))
+    check("per-upload snapshots -> deltas only for uploads seen on the latest day with history",
+          set(_mv) == {"c2"} and _mv["c2"]["days"] == 8 and _mv["c2"]["views"] == 0)
+    _m3 = dict(_m, videos={"c2": {"days": 8, "views": 600}, "c3": {"days": 8, "views": 0}})
+    _wv = metrics.channel_view_windows(_cat, [("28d", 28), ("1yr", 365)], now=_now, measured=_m3)
+    _wv0 = metrics.channel_view_windows(_cat, [("28d", 28), ("1yr", 365)], now=_now, measured=dict(_m, videos={"c2": {"days": 8, "views": 50}, "c3": {"days": 8, "views": 0}}))
+    check("uploads with their own measured rate are anchored individually (a hotter upload lifts the window)",
+          _wv["28d"]["method"] == "blend" and _wv["28d"]["videos_measured"] == 2 and _wv["28d"]["views"] > _wv0["28d"]["views"] > 0)
+    search_mod.record_video_snapshots(store, "UCsnaptest", [{"video_id": "s1", "views": 100}, {"video_id": "s2", "views": 5}, {"video_id": "s3"}])
+    check("per-upload snapshots recorded on lookup/sync (one row per upload per day)",
+          store._one("SELECT COUNT(*) AS n FROM video_snapshots WHERE channel_id='UCsnaptest'")["n"] == 2 and search_mod.video_snapshot_deltas(store, "UCsnaptest") == {})
+    _older = (__import__("datetime").datetime.strptime(search_mod._today(), "%Y-%m-%d") - _td(days=10)).strftime("%Y-%m-%d")
+    store._exec("INSERT OR REPLACE INTO video_snapshots VALUES ('UCsnaptest','s1',?,40)", (_older,))
+    _sd = search_mod.video_snapshot_deltas(store, "UCsnaptest")
+    check("per-upload deltas come back once an older day exists", _sd.get("s1", {}).get("days") == 10 and _sd["s1"]["views"] == 60 and "s2" not in _sd)
     combined = metrics.combine_daily({"a": [{"day": "2026-09-01", "views": 10, "engaged_views": 8}], "b": [{"day": "2026-09-01", "views": 5, "engaged_views": 4}, {"day": "2026-09-02", "views": 1}]})
     check("combine daily across channels", combined[0]["views"] == 15 and combined[0]["engaged_views"] == 12 and combined[1]["channels"] == 1)
     tot = metrics.sum_totals(combined)
@@ -395,15 +491,25 @@ def main():
     check("find/replace preview", tools.find_replace_preview([{"video_id": "x", "title": "Hello World", "description": "world"}], "world", "there")[0]["changes"] == {"title": "Hello there", "description": "there"})
     check("find/replace case sensitive", tools.find_replace_preview([{"video_id": "x", "title": "Hello World"}], "world", "t", case_sensitive=True) == [])
 
-    # -------------------------------------------------------- login + status
+    # --------------------------------------------------- accounts + isolation
     r = c.get("/api/status").get_json()
-    check("status public before login", r["authed"] is False and "ext_token" not in r)
+    check("status public before login", r["authed"] is False and "ext_token" not in r and r["user"] is None)
+    check("auth providers advertised", r["auth"]["password"] and r["auth"]["google"] and r["auth"]["discord"])
     check("api gated", c.get("/api/channels").status_code == 401)
-    check("wrong password rejected", c.post("/api/login", json={"password": "nope"}).status_code == 403)
-    check("login ok", c.post("/api/login", json={"password": "pw"}).get_json()["ok"])
+    check("signup rejects short password", c.post("/api/auth/signup",
+          json={"email": "erik@x.com", "password": "short"}).status_code == 400)
+    r = c.post("/api/auth/signup", json={"email": "erik@x.com", "password": "hunter2secret", "name": "Erik"}).get_json()
+    check("first signup claims owner (uid 1)", r["ok"] and r["user"]["id"] == 1 and r["user"]["email"] == "erik@x.com")
     r = c.get("/api/status").get_json()
-    check("status after login", r["authed"] and r["ext_token"] == "ext-secret" and r["channels"] == 0)
+    check("status after signup", r["authed"] and r["ext_token"] == "ext-secret" and r["channels"] == 0 and r["user"]["id"] == 1)
+    check("duplicate email refused", c.post("/api/auth/signup",
+          json={"email": "erik@x.com", "password": "whatever12"}).status_code == 409)
     check("index served", b"CreatorHaven" in c.get("/").data)
+    check("logout clears session", c.post("/api/auth/logout").get_json()["ok"] and c.get("/api/status").get_json()["authed"] is False)
+    check("wrong password rejected", c.post("/api/auth/login",
+          json={"email": "erik@x.com", "password": "nope"}).status_code == 403)
+    check("login ok", c.post("/api/auth/login", json={"email": "erik@x.com", "password": "hunter2secret"}).get_json()["ok"])
+    check("me returns the account", c.get("/api/auth/me").get_json()["user"]["id"] == 1)
 
     # ------------------------------------------------------------- linking
     r = c.get("/api/oauth/start?sets=readonly,analytics").get_json()
@@ -471,6 +577,143 @@ def main():
     r = c.post("/api/sync/now", json={"channel_id": "UCtest000000000000000001"}).get_json()["result"][0]
     check("engagedViews 400 falls back to views", r["analytics"] == "ok" and r["daily"] == 30, str(r["errors"]))
     STATE["engaged_400"] = False
+
+    # ------------------------------------------ multi-user isolation + OAuth sign-in
+    PNG1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMCAoHz5v0AAAAASUVORK5CYII="
+    # owner (client c) saves a thumbnail reference + a strategy note
+    check("owner saves a thumbnail ref", c.post("/api/thumbs/ref",
+          json={"kind": "face", "image_b64": PNG1, "mime": "image/png"}).get_json()["ok"])
+    owner_refs = c.get("/api/thumbs").get_json()["refs"]["face"]
+    check("owner sees own ref", len(owner_refs) == 1)
+    # a second creator signs up on a fresh session -> a brand-new empty account
+    c2 = application.test_client()
+    r = c2.post("/api/auth/signup", json={"email": "bob@x.com", "password": "bobpass1234", "name": "Bob"}).get_json()
+    check("second signup gets a new account (uid 2)", r["ok"] and r["user"]["id"] == 2)
+    check("new user has zero channels", c2.get("/api/channels").get_json()["channels"] == [])
+    check("new user overview is empty", c2.get("/api/overview").get_json()["channels"] == [])
+    check("new user cannot read owner channel", c2.get("/api/channels/UCtest000000000000000001").status_code == 404)
+    check("new user cannot sync owner channel", c2.post("/api/sync/now", json={"channel_id": "UCtest000000000000000001"}).status_code == 404)
+    check("new user cannot delete owner channel", c2.delete("/api/channels/UCtest000000000000000001").status_code == 404)
+    check("owner channel survives the attempts", store.channel("UCtest000000000000000001") is not None)
+    check("new user sees none of the owner's thumbnails", c2.get("/api/thumbs").get_json()["refs"]["face"] == [])
+    c2.post("/api/thumbs/ref", json={"kind": "face", "image_b64": PNG1, "mime": "image/png"})
+    check("owner still sees only their own ref", len(c.get("/api/thumbs").get_json()["refs"]["face"]) == 1)
+    # sign in WITH Google -> yet another distinct account
+    cg = application.test_client()
+    loc = cg.get("/auth/google").headers["Location"]
+    gstate = urllib.parse.parse_qs(urllib.parse.urlparse(loc).query)["state"][0]
+    r = cg.get(f"/auth/google/cb?code=good&state={gstate}")
+    check("google sign-in redirects home", r.status_code == 302 and r.headers["Location"].endswith("/"))
+    gu = cg.get("/api/auth/me").get_json()["user"]
+    check("google account created + isolated", gu and gu["email"] == "guser@gmail.com" and gu["id"] == 3)
+    check("google user has zero channels", cg.get("/api/channels").get_json()["channels"] == [])
+    # sign in WITH Discord
+    cd = application.test_client()
+    loc = cd.get("/auth/discord").headers["Location"]
+    dstate = urllib.parse.parse_qs(urllib.parse.urlparse(loc).query)["state"][0]
+    cd.get(f"/auth/discord/cb?code=good&state={dstate}")
+    du = cd.get("/api/auth/me").get_json()["user"]
+    check("discord account created + isolated", du and du["email"] == "erikd@discord.test" and du["id"] == 4)
+    check("users database tracks every signup", store.user_count() == 4)
+    check("owner-only settings guard blocks non-owner", c2.post("/api/settings", json={"sync_minutes": 5}).status_code == 403)
+    # re-auth the owner client for the remaining tests (its session is unchanged, but assert it)
+    check("owner session intact", c.get("/api/auth/me").get_json()["user"]["id"] == 1)
+    import base64 as _b64   # main() imports base64 locally further down, so the global name is shadowed here
+    check("members never receive the owner's extension token (it acts as the owner)", c2.get("/api/status").get_json().get("ext_token") not in (None, "ext-secret"))
+    # dismiss all: one click, scoped to the signed-in account
+    store.add_alert({"key": "bob-alert-1", "kind": "view_milestone", "title": "Bob's video passed 1K"}, user_id=2)
+    bob_aid = [a for a in store.alerts(user_id=2)][0]["id"]
+    c.post(f"/api/alerts/{bob_aid}/dismiss")
+    check("an alert id from another account cannot be dismissed", any(a["id"] == bob_aid for a in store.alerts(user_id=2)))
+    n_open = len(store.alerts(user_id=1))
+    r = c.post("/api/alerts/dismiss-all", json={}).get_json()
+    check("dismiss all clears every open alert of the account", r["ok"] and r["dismissed"] == n_open and store.alerts(user_id=1) == [])
+    check("dismiss all leaves other accounts' alerts alone", len(store.alerts(user_id=2)) == 1)
+    check("dismissed alerts stay viewable", len(c.get("/api/alerts?all=1").get_json()["alerts"]) >= n_open)
+    # public thumbnail generator: a daily free allowance per account, uploads checked + cleaned + capped
+    import io as _io
+    from sf import imagegen as _ig
+    _orig_gen = _ig.generate_image
+    _ig.generate_image = lambda key, prompt, refs=None, aspect_ratio="16:9": _b64.b64decode(PNG1)
+    try:
+        check("owner sets the daily free allowance",
+              c.post("/api/admin/whitelist", json={"thumbs_daily_free": 1}).get_json().get("thumbs_daily_free") == 1)
+        check("member cannot change the allowance", c2.post("/api/admin/whitelist", json={"thumbs_daily_free": 99}).status_code == 403)
+        check("member sees 1 free thumbnail left", c2.get("/api/thumbs").get_json()["allowance"] == {"limit": 1, "used": 0, "left": 1})
+        r = c2.post("/api/thumbs/generate", json={"subject": "a cat"})
+        check("a member's free generation works and is counted",
+              r.status_code == 200 and r.get_json()["ok"] and r.get_json()["allowance"]["left"] == 0)
+        r = c2.post("/api/thumbs/generate", json={"subject": "a cat"})
+        check("a member over the allowance is refused (429)", r.status_code == 429 and "free thumbnails" in r.get_json()["error"])
+        check("the owner is unlimited", c.get("/api/thumbs").get_json()["allowance"]["limit"] is None
+              and c.post("/api/thumbs/generate", json={"subject": "x"}).get_json()["ok"])
+        c.post("/api/admin/whitelist", json={"thumbs_daily_free": 0})
+        r = c2.post("/api/thumbs/generate", json={"subject": "a cat"})
+        check("allowance 0 = whitelist only", r.status_code == 429 and "whitelisted" in r.get_json()["error"])
+    finally:
+        _ig.generate_image = _orig_gen
+    r = c2.post("/api/thumbs/ref", json={"kind": "style", "image_b64": _b64.b64encode(b"not an image at all").decode(), "mime": "image/png"})
+    check("a non-image upload is refused", r.status_code == 400 and not r.get_json()["ok"])
+    try:
+        from PIL import Image as _Img
+        _buf = _io.BytesIO()
+        _ex = _Img.Exif(); _ex[270] = "secret-gps-note"
+        _Img.new("RGB", (40, 30), (200, 10, 10)).save(_buf, "JPEG", exif=_ex.tobytes())
+        assert b"secret-gps-note" in _buf.getvalue()
+        r = c2.post("/api/thumbs/ref", json={"kind": "style", "image_b64": _b64.b64encode(_buf.getvalue()).decode(), "mime": "image/jpeg"}).get_json()
+        _saved = (sfconfig.DATA / "thumbs" / "u2" / "refs" / "style" / f"{r['ref']['id']}.{r['ref']['ext']}").read_bytes()
+        check("uploads are re-encoded without their EXIF metadata", r["ok"] and b"secret-gps-note" not in _saved)
+    except ImportError:
+        pass
+    for _i in range(12):
+        c2.post("/api/thumbs/ref", json={"kind": "brand", "image_b64": PNG1, "mime": "image/png"})
+    r = c2.post("/api/thumbs/ref", json={"kind": "brand", "image_b64": PNG1, "mime": "image/png"})
+    check("12 references per kind, then a clear refusal", r.status_code == 400 and "12" in r.get_json()["error"]
+          and len(c2.get("/api/thumbs").get_json()["refs"]["brand"]) == 12)
+    # a brand-new account never inherits a leftover thumbnail folder that happens to carry its id
+    _left = sfconfig.DATA / "thumbs" / "u5" / "refs" / "face"
+    _left.mkdir(parents=True, exist_ok=True)
+    (_left / "0123456789abcdef.png").write_bytes(_b64.b64decode(PNG1))
+    c5 = application.test_client()
+    r = c5.post("/api/auth/signup", json={"email": "eve@x.com", "password": "evepass1234", "name": "Eve"}).get_json()
+    check("a new account starts with empty references even if a u<id> folder was left behind",
+          r["user"]["id"] == 5 and c5.get("/api/thumbs").get_json()["refs"]["face"] == []
+          and any((sfconfig.DATA / "thumbs" / "_retired").glob("u5-*")))
+    # ---- public release: personal extension keys, owner-only endpoints, lookup budget, privacy, deletion
+    bob_key = c2.get("/api/status").get_json().get("ext_token")
+    check("every account gets its own extension key (not the owner's)", bool(bob_key) and bob_key != "ext-secret")
+    check("a personal key connects the extension to THAT account",
+          c.get("/api/ext/ping", headers={"X-SF-Token": bob_key}).get_json().get("channels") == 0)
+    check("an unknown key is refused", c.get("/api/ext/ping", headers={"X-SF-Token": "nope"}).status_code == 401)
+    check("owner-only extension endpoints refuse a member key",
+          c.post("/api/ext/probe", json={"entries": []}, headers={"X-SF-Token": bob_key}).status_code == 403
+          and c.post("/api/ext/probe", json={"entries": []}, headers={"X-SF-Token": "ext-secret"}).status_code == 200)
+    _units_before = cfg.get("ext_daily_units")
+    cfg["ext_daily_units"] = 3
+    r = c.post("/api/ext/baselines", json={"channels": ["@nobodyone", "@nobodytwo"]}, headers={"X-SF-Token": bob_key}).get_json()["baselines"]
+    check("a member's uncached lookups stop at the daily budget (cached answers stay free)",
+          r.get("@nobodytwo") == {"limited": True} and r.get("@nobodyone") != {"limited": True}, str(r))
+    r = c.post("/api/ext/baselines", json={"channels": ["@nobodyone"]}, headers={"X-SF-Token": bob_key}).get_json()["baselines"]
+    check("an answer cached by the first lookup costs nothing", r.get("@nobodyone") != {"limited": True}, str(r))
+    r = c.post("/api/ext/baselines", json={"channels": ["@nobodythree"]}, headers={"X-SF-Token": "ext-secret"}).get_json()["baselines"]
+    check("the owner's extension is not budgeted", r.get("@nobodythree") != {"limited": True})
+    cfg["ext_daily_units"] = _units_before
+    new_key = c2.post("/api/ext-token/rotate", json={}).get_json().get("ext_token")
+    check("a new key replaces the old one", bool(new_key) and new_key != bob_key
+          and c.get("/api/ext/ping", headers={"X-SF-Token": bob_key}).status_code == 401
+          and c.get("/api/ext/ping", headers={"X-SF-Token": new_key}).status_code == 200)
+    anon = application.test_client()
+    r = anon.get("/privacy")
+    check("the privacy policy is public", r.status_code == 200 and b"privacy policy" in r.data and b"never sent" in r.data)
+    check("the owner can't delete the owner account", c.delete("/api/account", json={"confirm": "DELETE"}).status_code == 400)
+    check("deleting needs the typed confirmation", c5.delete("/api/account", json={"confirm": "yes"}).status_code == 400)
+    eve_key = c5.get("/api/status").get_json().get("ext_token")
+    c5.post("/api/thumbs/ref", json={"kind": "face", "image_b64": PNG1, "mime": "image/png"})
+    r = c5.delete("/api/account", json={"confirm": "DELETE"}).get_json()
+    check("delete my account removes the account, its key and its thumbnails",
+          r.get("ok") and store.get_user(5) is None and c5.get("/api/status").get_json()["authed"] is False
+          and c.get("/api/ext/ping", headers={"X-SF-Token": eve_key}).status_code == 401
+          and not (sfconfig.DATA / "thumbs" / "u5").exists())
     c.post("/api/sync/now", json={"channel_id": "UCtest000000000000000001"})
 
     # ------------------------------------------------------------- reads
@@ -512,7 +755,7 @@ def main():
     r = tool("rank", keyword="minecraft", target="@testchannel")
     check("rank checker channel", r["ok"] and r["result"]["kind"] == "channel" and r["result"]["rank"] == 1)
     r = tool("tag-rank", video="vid00000003", max_tags=2)
-    check("tag rank checker", r["ok"] and r["result"]["tags_checked"] == 2 and r["result"]["ranks"][0]["rank"] == 4)
+    check("tag rank checker removed", not r.get("ok"))
     r = tool("sponsors", video="vid00000002")
     check("sponsor locator parses segments", r["ok"] and len(r["result"]["segments"]) == 2 and r["result"]["segments"][0]["link"].endswith("t=30s"))
     r = tool("sponsors", video="vid00000001")
@@ -553,6 +796,64 @@ def main():
     # -------------------------------------------------------- studio + planner
     check("thumbs index lists styles", len(c.get("/api/thumbs").get_json()["styles"]) >= 8)
     check("predict rejects empty input", c.post("/api/predict", json={}).get_json()["ok"] is False)
+    _segs = _predict.parse_json3(json.dumps({"events": [{"tStartMs": 1000, "dDurationMs": 2000, "segs": [{"utf8": "hello "}, {"utf8": "there"}]},
+                                                       {"tStartMs": 20000, "dDurationMs": 1000, "segs": [{"utf8": "\n"}]},
+                                                       {"tStartMs": 21000, "dDurationMs": 1500, "segs": [{"utf8": "second chunk"}]}]}))
+    check("json3 captions parse", _segs == [(1.0, 3.0, "hello there"), (21.0, 22.5, "second chunk")])
+    _tt = _predict.parse_timedtext('<transcript><text start="4.5" dur="2">a &amp; b</text><text start="9">c</text></transcript>')
+    check("timedtext captions parse", _tt == [(4.5, 6.5, "a & b"), (9.0, 9.0, "c")])
+    _blk = _predict.transcript_block([(0, 2, "one"), (5, 7, "two"), (16, 18, "three"), (70, 71, "four")])
+    check("transcript block groups by ~15s with m:ss stamps", _blk == "[0:00] one two\n[0:16] three\n[1:10] four")
+    _long = [(i * 10.0, i * 10.0 + 5, "word " * 40) for i in range(200)]
+    _lb = _predict.transcript_block(_long, cap_chars=3000)
+    check("transcript block keeps the hook dense and thins the rest", len(_lb) <= 3400 and _lb.startswith("[0:00]") and "[0:40]" in _lb and "[9:00]" in _lb and _lb.count("\n") < 12)
+
+    class _FakeStore:
+        def channel(self, cid):
+            return {"channel_id": cid, "title": "Fake", "scopes": "analytics", "refresh_token": "r"} if cid == "UCfake" else None
+        def videos(self, cid):
+            return [{"video_id": f"v{i}", "views": 1000 * (i + 1), "is_short": 0, "privacy": "public",
+                     "published_at": f"2026-01-{i + 1:02d}", "duration_s": 600 + i} for i in range(12)] + \
+                   [{"video_id": "s1", "views": 99, "is_short": 1, "privacy": "public", "published_at": "2026-02-01", "duration_s": 30}]
+        def video(self, vid):
+            return None
+    _bl = _predict.channel_baseline(_FakeStore(), "UCfake", "v11", 0)
+    check("channel baseline = median of the previous same-format uploads", _bl and _bl["n"] == 11 and _bl["median_views"] == 6000
+          and _bl["this_views"] == 12000 and _bl["this_multiple"] == 2.0 and _bl["format"] == "long" and _bl["median_duration_s"] == 605)
+    check("channel baseline needs history", _predict.channel_baseline(_FakeStore(), "UCfake", "s1", 1) is None
+          and _predict.channel_baseline(_FakeStore(), "UCnope") is None)
+
+    class _FakeAnalytics:
+        def __init__(self, token):
+            self.token = token
+        def query(self, start, end, metrics, dimensions=None, sort=None, filters=None, max_results=None, ids=None):
+            if dimensions == ["elapsedVideoTimeRatio"]:
+                return {"rows": [{"elapsedVideoTimeRatio": i / 100, "audienceWatchRatio": max(0.2, 1 - i / 100)} for i in range(0, 101, 5)]}
+            return {"rows": [{"video": "v11", "views": 12000, "averageViewPercentage": 41.5},
+                             {"video": "v10", "views": 11000, "averageViewPercentage": 38.0},
+                             {"video": "v9", "views": 10000, "averageViewPercentage": 50.0}]}
+    class _FakeTokens:
+        def get(self, ch):
+            return "tok"
+    _act = _predict.actual_retention(_FakeStore(), _FakeTokens(), "UCfake", "v11", analytics_cls=_FakeAnalytics)
+    check("actual retention curve + AVD from analytics", _act and len(_act["curve"]) == 21 and _act["curve"][0] == {"pct": 0, "retention": 100.0}
+          and _act["avd_pct"] == 41.5 and _act["channel_avd_pct"] == 41.5 and _act["views"] == 12000)
+    check("actual retention skipped without analytics scope", _predict.actual_retention(_FakeStore(), _FakeTokens(), "UCnope", "v1", analytics_cls=_FakeAnalytics) is None)
+
+    _fin = _predict._finalize({"curve": [{"pct": 50, "retention": 40}, {"pct": 100, "retention": 20}], "avd_pct": "38.4",
+                               "packaging": {"thumbnails": [{"subject": "face", "text": "NO", "colours": "red"}]},
+                               "notes": [{"t": 30, "type": "cut", "note": "x"}, {"t": 2, "type": "hook", "note": "y"}],
+                               "views_multiple": [3, 0.5]}, {}, "t", 200, baseline={"median_views": 1000})["prediction"]
+    check("finalize anchors the curve at 0%=100", _fin["curve"][0] == {"pct": 0, "retention": 100, "t": 0} and _fin["curve"][1]["t"] == 100)
+    check("finalize flattens thumbnail concepts to strings", _fin["packaging"]["thumbnails"] == ["face — NO — red"])
+    check("finalize orders notes by time", [n["ts"] for n in _fin["notes"]] == ["0:02", "0:30"])
+    check("finalize expected views from the channel median", _fin["expected_views"] == {"low": 500, "high": 3000, "multiple": [0.5, 3.0]}
+          and _fin["avd_pct"] == 38.4 and _fin["confidence"] == "low")
+    _pr = c.post("/api/predict", json={"script": "Today we build a base. Then a creeper blows it up. The end.", "title": "Base build", "duration_s": 300}).get_json()
+    check("predict from a script end-to-end (gemini mock)", _pr["ok"] and _pr["prediction"]["predicted_score"] == 71 and _pr["prediction"]["transcript_source"] == "script"
+          and _pr["prediction"]["curve"][0]["retention"] == 100 and _pr["prediction"]["packaging"]["thumbnails"][0] == "face — NO — red"
+          and _pr["prediction"]["expected_views"] is None and _pr["prediction"]["drop_offs"][0]["t"] == 24)
+    check("predict prompt carried the script + curve rules", any("creeper blows it up" in x and "CHANNEL BASELINE" in x for x in STATE["predict_prompts"]))
     pr = c.post("/api/plan", json={"day": "2026-09-20", "title": "Plan A", "notify": True}).get_json()
     check("plan add", pr["ok"] and pr["item"]["title"] == "Plan A")
     pid = pr["item"]["id"]
@@ -580,6 +881,19 @@ def main():
     check("ext realtime stored", r["ok"] and store.realtime("UCtest000000000000000001")[0]["value"] == 1234)
     det = c.get("/api/channels/UCtest000000000000000001").get_json()
     check("realtime shows in channel detail", det["realtime"][0]["key"] == "last48Hours")
+
+    # ---- per-video report for the watch-page panel (/api/ext/video)
+    r = c.post("/api/ext/video", headers=h, json={"videoId": "vid00000025"}).get_json()
+    check("ext video report ok", r["ok"] and r["video"]["views"] == 90000 and r["video"]["is_short"] is False)
+    check("ext video outlier high", r["outlier"] and r["outlier"] > 3)
+    check("ext video ranking 1..10 (top of channel)", r["rank"] and r["rank"]["score"] == 10 and 1 <= r["rank"]["score"] <= 10)
+    check("ext video overview channel", r["channel"] and r["channel"]["subs"] == 125000 and r["channel"]["videos"])
+    check("ext video metrics present", r["metrics"] and r["metrics"]["median_views"])
+    check("ext video revenue band ordered (longform)",
+          r["revenue"]["low"] <= r["revenue"]["mid"] <= r["revenue"]["high"] and r["revenue"]["basis"] == "longform")
+    check("ext video needs id", c.post("/api/ext/video", headers=h, json={}).status_code == 400)
+    r2 = c.post("/api/ext/video", headers=h, json={"videoId": "vid00000007"}).get_json()
+    check("ext video short basis", r2["ok"] and r2["video"]["is_short"] is True and r2["revenue"]["basis"] == "shorts")
 
     # ---- extension pushes a DELEGATED channel's analytics into the dashboard tables
     payload = {"channels": [{
