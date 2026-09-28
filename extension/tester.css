@@ -5,7 +5,7 @@
 :root {
   --bg: #161719; --card: #1E2124; --panel2: #1E2124; --line: #27272A; --line2: #71717A;
   --text: #FFFFFF; --muted: #AAAAB2; --faint: #71717A; --dim: #3F3F46;
-  --accent: #A31D1D; --up: #34D399; --down: #F43F5E;
+  --accent: #FF4500; --up: #34D399; --down: #F43F5E;
   --radius: 2px;
   --font: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "Space Grotesk", "Inter", system-ui, sans-serif;

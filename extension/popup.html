@@ -5,25 +5,41 @@
   <title>CreatorHaven</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Space+Mono:wght@400;700&family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <header class="head">
     <button type="button" id="backBtn" class="iconbtn hidden" title="Back" aria-label="Back">&#8592;</button>
     <h1 id="headTitle">CreatorHaven</h1>
-    <span class="mark">SF</span>
+    <span class="mark">CH</span>
     <span id="saved" class="saved">Saved</span>
   </header>
 
   <!-- HOME: dense typographic directory -->
   <div id="home" class="home">
+    <button type="button" class="navrow" data-go="account"><span class="t">Account</span> <span class="d">connect CreatorHaven</span> <span class="arr">&#10142;</span></button>
     <button type="button" class="navrow" data-go="thumbnails"><span class="t">Thumbnails</span> <span class="d">grabber + downloader</span> <span class="arr">&#10142;</span></button>
     <button type="button" class="navrow" data-go="youtube"><span class="t">YouTube tweaks</span> <span class="d">dates, names, feed…</span> <span class="arr">&#10142;</span></button>
     <button type="button" class="navrow" data-go="studio"><span class="t">YouTube Studio</span> <span class="d">outliers, ads, explainers</span> <span class="arr">&#10142;</span></button>
     <button type="button" class="navrow" data-go="appearance"><span class="t">Appearance &amp; size</span> <span class="d">accent, player, fonts</span> <span class="arr">&#10142;</span></button>
     <button type="button" class="navrow" data-go="tester"><span class="t">Thumbnail tester</span> <span class="d">preview at feed size</span> <span class="arr">&#10142;</span></button>
   </div>
+
+  <!-- Account -->
+  <section class="page hidden" data-page="account">
+    <div class="card">
+      <h2>Your CreatorHaven account</h2>
+      <p class="thumb-hint">Sign in on the CreatorHaven website, open <b>Settings &rarr; Browser extension</b>, copy your key and paste it here. The outlier bubbles, Studio stats and channel lookups use it.</p>
+      <label class="field"><span>Extension key</span><input type="password" data-key="token" placeholder="paste your key" spellcheck="false" autocomplete="off"></label>
+      <div class="row"><button type="button" id="testBtn" class="btn primary">Connect</button><button type="button" id="openSite" class="btn">Open CreatorHaven</button></div>
+      <p id="connStatus" class="status muted"></p>
+      <label class="toggle"><input type="checkbox" data-key="studioProbe"><span class="sw"></span><span class="lbl">Send my Studio numbers to my account <em>fills your dashboard for channels you manage</em></span></label>
+      <details class="adv"><summary>Advanced</summary>
+        <label class="field"><span>Site address</span><input type="text" data-key="siteUrl" spellcheck="false"></label>
+      </details>
+    </div>
+  </section>
 
   <!-- Thumbnails -->
   <section class="page hidden" data-page="thumbnails">
@@ -57,7 +73,8 @@
       <label class="toggle"><input type="checkbox" data-key="shortsRedirect"><span class="sw"></span><span class="lbl">Open Shorts as normal videos</span></label>
       <label class="toggle"><input type="checkbox" data-key="realNames"><span class="sw"></span><span class="lbl">Real channel names instead of @handles</span></label>
       <label class="toggle"><input type="checkbox" data-key="subCounts"><span class="sw"></span><span class="lbl">Subscriber badge next to names</span></label>
-      <label class="toggle"><input type="checkbox" data-key="youtubeOutliers"><span class="sw"></span><span class="lbl">Outlier multiplier next to titles <em>2.3&times; vs the channel&rsquo;s median</em></span></label>
+      <label class="toggle"><input type="checkbox" data-key="youtubeOutliers"><span class="sw"></span><span class="lbl">Outlier bubble by the sub count <em>2.3&times; vs the channel&rsquo;s median, colour-graded</em></span></label>
+      <label class="toggle"><input type="checkbox" data-key="youtubePanel"><span class="sw"></span><span class="lbl">Watch-page stats panel <em>views &middot; 1-10 ranking &middot; overview &middot; revenue</em></span></label>
       <label class="toggle"><input type="checkbox" data-key="dontRecommend"><span class="sw"></span><span class="lbl">&times; &ldquo;Don&rsquo;t recommend channel&rdquo; on hover</span></label>
       <label class="toggle"><input type="checkbox" data-key="favorites"><span class="sw"></span><span class="lbl">Favorites block in the sidebar <span id="favCount" class="pill" title="starred channels">0</span></span></label>
     </div>
@@ -68,13 +85,18 @@
     <div class="card">
       <h2>Panel &amp; analytics</h2>
       <label class="toggle"><input type="checkbox" data-key="studioPanel"><span class="sw"></span><span class="lbl">CreatorHaven panel <em>floating button: decoder + research</em></span></label>
+      <label class="toggle"><input type="checkbox" data-key="studioLatestPlus"><span class="sw"></span><span class="lbl">Latest video card: rank vs <b>all</b> your videos <em>+ engaged views</em></span></label>
       <label class="toggle"><input type="checkbox" data-key="studioOutlierAll"><span class="sw"></span><span class="lbl">Outlier score vs <b>all</b> your uploads (not just the last 10)</span></label>
       <label class="toggle"><input type="checkbox" data-key="studioExplainers"><span class="sw"></span><span class="lbl">Explain metrics on hover <em>&#9432; what it means + how to read it</em></span></label>
     </div>
     <div class="card">
       <h2>Ads <span class="exp">experimental</span></h2>
-      <label class="toggle"><input type="checkbox" data-key="studioAdPlacer"><span class="sw"></span><span class="lbl">Auto ad placer <em>place mid-rolls every N min</em></span></label>
-      <label class="field sub" data-dep="studioAdPlacer"><span>Interval between mid-rolls (minutes)</span><input type="number" min="1" max="60" step="1" data-key="studioAdInterval"></label>
+      <label class="toggle"><input type="checkbox" data-key="studioAdPlacer"><span class="sw"></span><span class="lbl">Ad Placer card <em>timeline + interval / silence / subtractive</em></span></label>
+      <label class="field sub" data-dep="studioAdPlacer"><span>Default mode</span><select data-key="adPlacerMode"><option value="interval">Interval</option><option value="silence">Silence</option><option value="subtractive">Subtractive</option></select></label>
+      <label class="field sub" data-dep="studioAdPlacer"><span>Interval (seconds, 0.1&ndash;60)</span><input type="number" min="0.1" max="60" step="0.1" data-key="adPlacerInterval"></label>
+      <label class="toggle sub" data-dep="studioAdPlacer"><input type="checkbox" data-key="adPlacerStart"><span class="sw"></span><span class="lbl">Ad at start</span></label>
+      <label class="toggle sub" data-dep="studioAdPlacer"><input type="checkbox" data-key="adPlacerEnd"><span class="sw"></span><span class="lbl">Ad at end</span></label>
+      <label class="field sub" data-dep="studioAdPlacer" hidden><span>legacy</span><input type="number" min="1" max="3600" step="1" data-key="studioAdInterval"></label>
       <label class="toggle"><input type="checkbox" data-key="studioRemoveRedAds"><span class="sw"></span><span class="lbl">Remove unapproved (red) ad breaks button</span></label>
       <p class="thumb-hint">These add buttons to the video&rsquo;s Monetization / Editor page; review the result before saving in Studio.</p>
     </div>
@@ -118,9 +140,7 @@
 
   <!-- retained settings kept out of the UI (self-contained client presentation) -->
   <div hidden aria-hidden="true">
-    <input type="text" data-key="siteUrl">
-    <input type="password" data-key="token">
-    <input type="checkbox" data-key="studioProbe">
+    <input type="checkbox" data-key="studioProbeCapture">
   </div>
 
   <script src="lib/common.js"></script>

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "CreatorHaven",
-  "version": "0.1.0",
-  "description": "YouTube and YouTube Studio power-up: exact upload dates, real commenter names, feed cleaner, thumbnail tools, playlist search, a Studio network probe and a thumbnail tester.",
+  "version": "1.0.0",
+  "description": "CreatorHaven for YouTube creators: outlier scores while you browse, extra YouTube Studio stats, an ad-slot placer and thumbnail tool",
   "minimum_chrome_version": "121",
   "browser_specific_settings": {
     "gecko": {
@@ -25,32 +25,69 @@
   },
   "background": {
     "service_worker": "bg.js",
-    "scripts": ["lib/common.js", "bg.js"]
+    "scripts": [
+      "lib/common.js",
+      "bg.js"
+    ]
   },
-  "permissions": ["storage", "alarms", "activeTab"],
+  "permissions": [
+    "storage",
+    "alarms",
+    "activeTab"
+  ],
   "host_permissions": [
+    "https://creatorhaven.onrender.com/*",
     "http://127.0.0.1:5800/*",
     "http://localhost:5800/*",
     "https://i.ytimg.com/*",
     "https://yt3.ggpht.com/*"
   ],
-  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
   "content_scripts": [
     {
-      "matches": ["https://www.youtube.com/*"],
-      "js": ["lib/common.js", "content/yt.js", "content/thumbgrab.js", "content/outlier.js"],
-      "css": ["content/yt.css", "content/thumbgrab.css", "content/outlier.css"],
+      "matches": [
+        "https://www.youtube.com/*"
+      ],
+      "js": [
+        "lib/common.js",
+        "content/yt.js",
+        "content/thumbgrab.js",
+        "content/outlier.js",
+        "content/watchpanel.js"
+      ],
+      "css": [
+        "content/yt.css",
+        "content/thumbgrab.css",
+        "content/outlier.css",
+        "content/watchpanel.css"
+      ],
       "run_at": "document_start"
     },
     {
-      "matches": ["https://studio.youtube.com/*"],
-      "js": ["lib/common.js", "content/studio.js", "content/studio_features.js"],
-      "css": ["content/studio.css", "content/studio_features.css"],
+      "matches": [
+        "https://studio.youtube.com/*"
+      ],
+      "js": [
+        "lib/common.js",
+        "content/studio.js",
+        "content/studio_features.js"
+      ],
+      "css": [
+        "content/studio.css",
+        "content/studio_features.css"
+      ],
       "run_at": "document_start"
     },
     {
-      "matches": ["https://studio.youtube.com/*"],
-      "js": ["content/studio_probe_main.js"],
+      "matches": [
+        "https://studio.youtube.com/*"
+      ],
+      "js": [
+        "content/studio_probe_main.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     }
