@@ -69,6 +69,18 @@
   $$('#tabs button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
   // the account mark opens Settings (Settings lives off the visible nav strip)
   if ($('#acct')) $('#acct').onclick = () => showTab('settings');
+  if ($('#signOutBtn')) $('#signOutBtn').onclick = async () => { await api('/api/auth/logout', { method: 'POST', body: {} }); location.href = '/'; };
+  if ($('#deleteAcctBtn')) $('#deleteAcctBtn').onclick = async () => {
+    const c = prompt('This deletes your account, your tracked channels, plans, alerts and thumbnails for good. Type DELETE to confirm.');
+    if (!c) return;
+    const j = await api('/api/account', { method: 'DELETE', body: { confirm: c } });
+    if (j.ok) { alert('Your account was deleted.'); location.href = '/'; } else toast(j.error || 'failed');
+  };
+  if ($('#extTokenRotate')) $('#extTokenRotate').onclick = async () => {
+    if (!confirm('Make a new extension key? The extension stops working until you paste the new one.')) return;
+    const j = await api('/api/ext-token/rotate', { method: 'POST', body: {} });
+    if (j.ok) { $('#extToken').textContent = j.ext_token; toast('New key made. Paste it into the extension.'); } else toast(j.error || 'failed');
+  };
 
   // -------------------------------------------------- theme: light / dark / system (persisted)
   const resolvedTheme = m => m === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : m;
@@ -159,17 +171,67 @@
   async function refreshStatus() {
     const s = await api('/api/status');
     state.status = s;
-    if (!s.authed) { showLogin(true); return s; }
+    if (!s.authed) { renderAuth(s.auth || {}); showLogin(true); return s; }
     showLogin(false);
     const q = s.quota_today || {};
     $('#quota').textContent = `quota ${full(q.units || 0)} / 10,000`;
     $('#alertBadge').textContent = s.alerts_open || 0;
     $('#alertBadge').classList.toggle('hidden', !s.alerts_open);
     $('#syncBtn').textContent = s.sync_running ? '⟳ Syncing…' : '⟳ Sync';
+    if (s.user && $('#acctWho')) $('#acctWho').textContent = s.user.email || s.user.name || '';
+    if (s.user && $('#acct')) $('#acct').textContent = ((s.user.name || s.user.email || 'CH').trim()[0] || 'C').toUpperCase();
+    // role gating: when AI is whitelist-only, members get only the thumbnail generator (their
+    // daily free allowance) — and no Studio tab at all when the owner set that allowance to 0
+    state.isAdmin = !!s.is_admin; state.isOwner = !!s.is_owner; state.role = s.role || 'member';
+    state.aiLocked = !state.isAdmin && !!s.ai_whitelist_only;
+    const hideAI = state.aiLocked && !(s.thumbs_daily_free > 0);
+    $$('#tab-studio .studio-nav button').forEach(b => b.classList.toggle('hidden', state.aiLocked && b.dataset.ssec !== 'generate'));
+    if (state.aiLocked) state.ssec = 'generate';
+    const studioBtn = document.querySelector('#tabs button[data-tab="studio"]');
+    if (studioBtn) {
+      studioBtn.classList.toggle('hidden', hideAI);
+      const sep = studioBtn.nextElementSibling;
+      if (sep && sep.classList.contains('nsep')) sep.classList.toggle('hidden', hideAI);
+      if (hideAI && studioBtn.classList.contains('active')) showTab('home');
+    }
     return s;
   }
-  $('#pwgo').onclick = async () => { const j = await api('/api/login', { method: 'POST', body: { password: $('#pw').value } }); if (j.ok) { await refreshStatus(); showTab(location.hash.slice(1) || 'home'); } else $('#pwerr').textContent = j.error || 'no'; };
-  $('#pw').onkeydown = e => { if (e.key === 'Enter') $('#pwgo').click(); };
+
+  // ---- account sign in / sign up -----------------------------------------
+  let authMode = 'login';   // 'login' | 'signup'
+  function renderAuth(providers) {
+    const g = $('#authGoogle'), d = $('#authDiscord'), wrap = $('#authOauth');
+    g.classList.toggle('hidden', !providers.google);
+    d.classList.toggle('hidden', !providers.discord);
+    wrap.classList.toggle('hidden', !(providers.google || providers.discord));
+    setAuthMode(authMode);
+    const err = new URLSearchParams(location.search).get('auth_error');
+    if (err) { $('#authErr').textContent = 'That sign-in did not complete. Please try again.'; history.replaceState(null, '', location.pathname + location.hash); }
+  }
+  function setAuthMode(mode) {
+    authMode = mode;
+    const signup = mode === 'signup';
+    $('#authName').classList.toggle('hidden', !signup);
+    $('#authGo').textContent = signup ? 'Create account' : 'Sign in';
+    $('#authIntro').textContent = signup ? 'Create your workspace.' : 'Sign in to your workspace.';
+    $('#authSwitchText').textContent = signup ? 'Already have an account?' : `New to ${document.body.dataset.app}?`;
+    $('#authSwitch').textContent = signup ? 'Sign in' : 'Create an account';
+    $('#authPw').setAttribute('autocomplete', signup ? 'new-password' : 'current-password');
+    $('#authErr').textContent = '';
+  }
+  async function submitAuth() {
+    const email = $('#authEmail').value.trim(), pw = $('#authPw').value, name = $('#authName').value.trim();
+    if (!email || !pw) { $('#authErr').textContent = 'Enter your email and password.'; return; }
+    const url = authMode === 'signup' ? '/api/auth/signup' : '/api/auth/login';
+    const j = await api(url, { method: 'POST', body: { email, password: pw, name } });
+    if (j.ok) { $('#authPw').value = ''; await refreshStatus(); showTab(location.hash.slice(1) || 'home'); }
+    else $('#authErr').textContent = j.error || 'Could not sign you in.';
+  }
+  if ($('#authGo')) {
+    $('#authGo').onclick = submitAuth;
+    $('#authSwitch').onclick = e => { e.preventDefault(); setAuthMode(authMode === 'signup' ? 'login' : 'signup'); };
+    ['authEmail', 'authPw', 'authName'].forEach(id => { const el = $('#' + id); if (el) el.onkeydown = e => { if (e.key === 'Enter') submitAuth(); }; });
+  }
   $('#syncBtn').onclick = async () => { const j = await api('/api/sync', { method: 'POST', body: {} }); toast(j.started ? 'Sync started' : 'Sync already running'); pollSync(); };
   async function pollSync() {
     for (let i = 0; i < 120; i++) {
@@ -657,6 +719,14 @@
     bindAlertButtons($('#alertsList'));
   }
   $('#alertsAll').onchange = loadAlerts;
+  // one click clears the whole list (dismissed alerts stay viewable under "show dismissed")
+  $('#alertsDismissAll').onclick = async () => {
+    const b = $('#alertsDismissAll'); b.disabled = true;
+    const j = await api('/api/alerts/dismiss-all', { method: 'POST', body: {} });
+    b.disabled = false;
+    toast(j.ok ? (j.dismissed ? `Dismissed ${j.dismissed} alert${j.dismissed === 1 ? '' : 's'}` : 'No open alerts') : (j.error || 'failed'));
+    loadAlerts(); refreshStatus();
+  };
   $('#alertsDeliver').onclick = async () => { const j = await api('/api/alerts/deliver', { method: 'POST', body: {} }); toast(j.delivered ? `Sent ${j.delivered} alert(s) to Discord` : (j.error || 'Nothing new to send (or no webhook set)')); };
 
   // --------------------------------------------------------------- tools
@@ -664,7 +734,6 @@
     ['Analyze', 'video-analyzer', 'Video analyzer', 'Full read on any video: views & velocity, an estimated retention (AVD) curve, estimated CTR, engagement, engaged views, monetization signals and tags.', [['video', 'Video URL or id']]],
     ['Analyze', 'playlist-analyzer', 'Playlist analyzer', 'Total views, duration and top videos for any playlist.', [['playlist', 'Playlist URL or id']]],
     ['Analyze', 'keyword', 'Keyword analyzer', 'Who ranks for a search term, how big they are, how fresh, and a difficulty score.', [['keyword', 'Keyword'], ['region', 'Region code (optional, e.g. US)']]],
-    ['Check', 'tag-rank', 'Tag rank checker', 'Where a video ranks for each of its own tags (100 quota units per tag).', [['video', 'Video URL or id'], ['max_tags', 'Max tags to check (default 15)']]],
     ['Check', 'ad-safety', 'Ad-safety checker', 'Gemini reviews a title, description or script for advertiser-unfriendly content.', [['text', 'Title / description / script', 'textarea']]],
     ['Download', 'thumbnails', 'Thumbnail downloader', 'Every thumbnail size for a video, with a check of which really exist.', [['video', 'Video URL or id']]],
     ['Download', 'channel-images', 'Profile picture & banner', 'High-resolution avatar and banner URLs for any channel.', [['channel', 'Channel URL or @handle']]],
@@ -678,7 +747,7 @@
   ];
   const TOOLCAT = {
     Analyze: { hue: 'var(--violet)', blurb: 'Understand any video, playlist or keyword', d: 'M4 20V10M10 20V4M16 20v-7M20 20H2' },
-    Check: { hue: 'var(--cyan)', blurb: 'Rankings, sponsors, ad-safety and IDs', d: 'M12 3l7 3v5c0 4.2-3 7.4-7 8.4C8 18.4 5 15.2 5 11V6zM9 11.5l2 2 4-4' },
+    Check: { hue: 'var(--cyan)', blurb: 'Ad-safety before you publish', d: 'M12 3l7 3v5c0 4.2-3 7.4-7 8.4C8 18.4 5 15.2 5 11V6zM9 11.5l2 2 4-4' },
     Download: { hue: 'var(--emerald)', blurb: 'Pull thumbnails, images, comments, backups', d: 'M12 3v11M7.5 10.5L12 15l4.5-4.5M4 20h16' },
     Create: { hue: 'var(--amber)', blurb: 'Tags, thumbnails, giveaways and links', d: 'M12 3l1.8 4.7L18 9l-4.2 1.3L12 15l-1.8-4.7L6 9l4.2-1.3z' },
   };
@@ -780,7 +849,6 @@
       case 'monetization': return `<div class="tiles"><div class="tile"><div class="k">Monetized signal</div><div class="v">${r.monetized ? 'YES' : 'NO'}</div><div class="sub">${r.ad_slots} ad placements · ${r.player_ads} player ads</div></div><div class="tile"><div class="k">Playable</div><div class="v">${r.playable ? 'yes' : 'no'}</div><div class="sub">${esc(r.playability || '')}</div></div><div class="tile"><div class="k">Family safe</div><div class="v">${r.family_safe == null ? '–' : r.family_safe ? 'yes' : 'no'}</div><div class="sub">${r.countries} countries</div></div></div><p><b>${esc(r.title)}</b> · ${esc(r.channel)} · ${esc(r.category || '')}</p><p class="tiny">"Monetized" means the public player response carried ad placements at the time of the check. Ads can be absent for a monetized video (viewer region, ad inventory) and present on claimed videos (ads for the claimant), so treat this as a signal, not proof.</p>`;
       case 'keyword': return `<div class="tiles"><div class="tile"><div class="k">Difficulty</div><div class="v">${r.difficulty}</div><div class="sub">${esc(r.verdict)}</div></div><div class="tile"><div class="k">Top-10 median subs</div><div class="v">${fmt(r.median_subscribers_top10)}</div></div><div class="tile"><div class="k">Small channels in top 50</div><div class="v">${r.small_channels_in_top50}</div><div class="sub">under 10K subs</div></div><div class="tile"><div class="k">Fresh (30d) in top 50</div><div class="v">${r.fresh_last30d}</div></div></div><p><b>Common title words:</b> ${r.titles_words.map(([w, n]) => `<span class="pill">${esc(w)} ${n}</span>`).join(' ')}</p><table><thead><tr><th>#</th><th>Title</th><th>Channel</th><th>Subs</th><th>Views</th><th>Age</th></tr></thead><tbody>${r.results.map(x => `<tr><td>${x.rank}</td><td class="wrap"><a href="https://www.youtube.com/watch?v=${x.video_id}" target="_blank">${esc(x.title)}</a></td><td>${esc(x.channel)}</td><td>${fmt(x.subscribers)}</td><td>${fmt(x.views)}</td><td>${x.age_days}d</td></tr>`).join('')}</tbody></table>`;
       case 'rank': return `<div class="tile"><div class="k">Rank for “${esc(r.keyword)}”</div><div class="v">${r.rank ? '#' + r.rank : 'not in top ' + r.checked}</div><div class="sub">${r.kind} ${r.target}</div></div><h3 class="mt">Top 10 right now</h3><ol>${r.top.map(x => `<li><a href="https://www.youtube.com/watch?v=${x.video_id}" target="_blank">${esc(x.title)}</a> <span class="tiny">${esc(x.channel_title)}</span></li>`).join('')}</ol>`;
-      case 'tag-rank': return `<p><b>${esc(r.title)}</b> · ${r.tags_checked} of ${r.tags_total} tags checked · <span class="tiny">${r.quota_note}</span></p><table><thead><tr><th>Tag</th><th>Rank (top 50)</th></tr></thead><tbody>${r.ranks.map(x => `<tr><td>${esc(x.tag)}</td><td>${x.rank ? `<span class="pill good">#${x.rank}</span>` : '<span class="muted">not ranking</span>'}</td></tr>`).join('')}</tbody></table>`;
       case 'sponsors': return r.segments.length ? `<table><thead><tr><th>Category</th><th>Start</th><th>End</th><th>Length</th><th>Votes</th></tr></thead><tbody>${r.segments.map(s => `<tr><td><span class="pill">${s.category}</span></td><td><a href="${s.link}" target="_blank">${dur(Math.floor(s.start))}</a></td><td>${dur(Math.floor(s.end))}</td><td>${s.duration}s</td><td>${s.votes}</td></tr>`).join('')}</tbody></table><p class="tiny">${esc(r.source)}</p>` : `<p class="muted">${esc(r.note || 'No segments.')}</p>`;
       case 'comment-picker': return `<p>${r.eligible} eligible · seed ${r.seed}</p>${r.winners.map(w => `<div class="alert"><div class="sev good"></div><div class="body"><b>${esc(w.author)}</b><div class="m">${esc(w.text)}</div></div></div>`).join('')}`;
       case 'subscribe-link': return `<p><a href="${r.link}" target="_blank">${r.link}</a> <button class="small" data-copy="${r.link}">copy</button></p>`;
@@ -795,13 +863,50 @@
   async function loadSettings() {
     const s = await refreshStatus();
     $('#statusBox').innerHTML = [['Google OAuth client', s.google_client ? `configured (${s.google_client_id_tail}, ${s.google_client_type})` : 'MISSING'], ['Gemini key', s.gemini ? 'present' : 'missing'], ['Storage', s.persistence && s.persistence.enabled ? `durable (Postgres backup${s.persistence.pushes ? ', ' + s.persistence.pushes + ' pushes' : ''}${s.persistence.error ? ' · ' + s.persistence.error : ''})` : (s.hosted ? 'EPHEMERAL — add a DATABASE_URL or data resets on every deploy' : 'local SQLite file')], ['YouTube API key', s.youtube_api_key ? 'present' : 'not set (OAuth tokens used)'], ['Discord webhook', s.discord ? 'set' : 'not set'], ['Linked channels', s.channels], ['Quota today', `${full(s.quota_today?.units)} units / ${s.quota_today?.calls} calls`], ['Last sync', ago(s.last_sync?.at)], ['Base URL', s.base_url]].map(([k, v]) => `<div><span>${k}</span><span>${esc(v)}</span></div>`).join('');
+    if ($('#acctRole')) $('#acctRole').textContent = (s.role && s.role !== 'member') ? ` · ${s.role}` : '';
+    renderWhitelist(s);
     $('#setSync').value = s.sync_minutes; $('#setScan').value = s.scan_per_channel; $('#setDays').value = s.analytics_days; $('#setBase').value = s.base_url; $('#setGtype').value = s.google_client_type;
-    $('#extUrl').textContent = s.base_url; $('#extToken').textContent = s.ext_token;
+    $('#extUrl').textContent = s.base_url; $('#extToken').textContent = s.ext_token || '(sign in to get your key)';
+    if ($('#extTokenRotate')) $('#extTokenRotate').classList.toggle('hidden', !!s.is_owner || !s.ext_token);
+    if ($('#deleteAcctBtn')) $('#deleteAcctBtn').classList.toggle('hidden', !!s.is_owner || !s.user);
     const l = await api('/api/channels');
     $('#linkedList').innerHTML = (l.channels || []).map(c => `<div class="row between"><span>${c.thumb ? `<img src="${c.thumb}" style="width:20px;height:20px;border-radius:50%;vertical-align:middle"> ` : ''}${esc(c.title)} <span class="tiny">${(c.scopes || '').includes('yt-analytics') ? 'analytics ✓' : '<span class="warn">no analytics scope</span>'}${(c.scopes || '').includes('force-ssl') ? ' · edit ✓' : ''}</span></span><button class="small" data-unlink="${c.channel_id}">remove</button></div>`).join('') || '<p class="muted">None yet.</p>';
     $$('[data-unlink]').forEach(b => b.onclick = async () => { if (!confirm('Remove this channel from CreatorHaven? (The schedule bot keeps its own link.)')) return; await api(`/api/channels/${b.dataset.unlink}`, { method: 'DELETE' }); loadSettings(); });
     const lg = await api('/api/log'); $('#logBox').textContent = (lg.lines || []).join('\n');
   }
+  function renderWhitelist(s) {
+    const p = $('#whitelistPanel'); if (!p) return;
+    p.classList.toggle('hidden', !s.is_owner);
+    if (!s.is_owner) return;
+    $('#wlOwner').textContent = (s.user && s.user.email) || '';
+    $('#wlAiOnly').checked = !!s.ai_whitelist_only;
+    if ($('#wlThumbs')) $('#wlThumbs').value = s.thumbs_daily_free ?? 0;
+    const emails = s.admin_emails || [];
+    $('#wlList').innerHTML = emails.length
+      ? emails.map(e => `<div class="row between"><span>${esc(e)} <span class="tiny">admin ✓</span></span><button class="small" data-wlrm="${esc(e)}">remove</button></div>`).join('')
+      : '<p class="muted">No whitelisted accounts yet — only you (owner) get the AI + special settings.</p>';
+    $$('[data-wlrm]').forEach(b => b.onclick = async () => {
+      await api('/api/admin/whitelist', { method: 'POST', body: { action: 'remove', email: b.dataset.wlrm } });
+      loadSettings();
+    });
+  }
+  if ($('#wlAdd')) $('#wlAdd').onclick = async () => {
+    const email = ($('#wlEmail').value || '').trim(); if (!email) { $('#wlEmail').focus(); return; }
+    const j = await api('/api/admin/whitelist', { method: 'POST', body: { action: 'add', email } });
+    $('#wlMsg').textContent = j.ok ? 'Added.' : (j.error || 'failed');
+    if (j.ok) $('#wlEmail').value = '';
+    loadSettings();
+  };
+  if ($('#wlAiOnly')) $('#wlAiOnly').onchange = async () => {
+    await api('/api/admin/whitelist', { method: 'POST', body: { ai_whitelist_only: $('#wlAiOnly').checked } });
+    loadSettings();
+  };
+  if ($('#wlThumbsSave')) $('#wlThumbsSave').onclick = async () => {
+    const n = parseInt($('#wlThumbs').value, 10);
+    const j = await api('/api/admin/whitelist', { method: 'POST', body: { thumbs_daily_free: isNaN(n) ? 0 : n } });
+    $('#wlThumbsMsg').textContent = j.ok ? `Saved: ${j.thumbs_daily_free} per day.` : (j.error || 'failed');
+    refreshStatus();
+  };
   $('#linkBtn').onclick = async () => {
     const sets = ['readonly', ...$$('.scopes input:checked').map(i => i.dataset.scope).filter(x => x !== 'readonly')];
     const j = await api(`/api/oauth/start?sets=${sets.join(',')}`);
@@ -906,7 +1011,9 @@
     // headline number, which is what Studio's "28 day views" actually measures.
     const wsub = wk === 'lifetime'
       ? '<div class="d muted">all-time total</div>'
-      : `<div class="d muted">est · residual model${ws.boost ? ` · +${fmt(ws.boost)} catalog lift` : ''}${ws.sample ? ` · ${ws.sample} uploads` : ''}</div>`;
+      : `<div class="d muted">${ws.method === 'measured' ? `measured · ${ws.measured_days} days of daily snapshots`
+        : ws.method === 'blend' ? (ws.videos_measured ? `est · ${ws.sample} uploads · ${ws.videos_measured} anchored to ${ws.measured_days} measured days` : `est · ${ws.sample} uploads · tail calibrated on ${ws.measured_days} snapshot days`)
+        : `est · ${ws.sample || 0} uploads modelled`}${ws.back_catalog ? ` · +${fmt(ws.back_catalog)} older` : ''}</div>`;
     const d = (x, key) => x ? `<div class="d ${x[key] >= 0 ? 'up' : 'down'}">${x[key] >= 0 ? '+' : ''}${fmt(x[key])} / ${x.days}d</div>` : '<div class="d muted">tracking since today</div>';
     const tiles = [
       ['Subscribers', c.hidden_subs ? 'hidden' : fmt(c.subscribers), d(g.d30 || g.d7, 'subscribers')],
@@ -958,6 +1065,7 @@
   // ============================================================== STUDIO (AI suite)
   $$('#tab-studio .studio-nav button').forEach(b => b.onclick = () => setStudioSec(b.dataset.ssec));
   function setStudioSec(sec) {
+    if (state.aiLocked) sec = 'generate';   // members only have the generator
     state.ssec = sec;
     $$('#tab-studio .studio-nav button').forEach(b => b.classList.toggle('on', b.dataset.ssec === sec));
     $$('#tab-studio .studio-sec').forEach(s => s.classList.toggle('on', s.id === 'ssec-' + sec));
@@ -971,7 +1079,8 @@
       if (!state.channels) { const cj = await api('/api/channels'); state.channels = cj.channels || []; }
       $('#stChan').innerHTML = '<option value="">All my channels</option>' +
         (state.channels || []).map(c => `<option value="${c.channel_id}">${esc(c.title || c.channel_id)}</option>`).join('');
-      renderSuggest(); wirePredict(); wireReview(); loadStrategy();
+      renderSuggest(); wirePredict(); wireReview();
+      if (!state.aiLocked) loadStrategy();
     }
     setStudioSec(state.ssec || 'strategy');
   }
@@ -1289,14 +1398,14 @@
     $('#pvGo').onclick = async () => {
       const source = $('#pvSource').value.trim(), script = $('#pvScript').value.trim();
       if (!source && !script) { toast('Paste a video link or a script'); return; }
-      $('#pvOut').innerHTML = predSpin('Modelling the retention curve…');
+      $('#pvOut').innerHTML = predSpin(source ? 'Pulling the real transcript + channel baseline, then modelling the retention curve…' : 'Modelling the retention curve from your script…');
       const j = await api('/api/predict', { method: 'POST', body: { source, script } });
       $('#pvOut').innerHTML = j.ok ? '' : predErr(j.error); if (j.ok) renderPredict(j);
     };
     $('#pvWatch').onclick = async () => {
       const file = $('#pvFile').files[0], path = $('#pvPath').value.trim();
       if (!file && !path) { toast('Choose an MP4 or enter a local file path'); return; }
-      $('#pvProg').textContent = 'Watching the video — sampling frames + audio. This can take a minute for long videos.';
+      $('#pvProg').textContent = 'Watching the video — sampling frames + audio, transcribing the speech (GPU), then the teardown. Roughly a minute per 20 minutes of footage.';
       $('#pvOut').innerHTML = predSpin('Watching your video…');
       let j;
       try {
@@ -1312,19 +1421,29 @@
     };
   }
   const NOTE_CLASS = { cut: 'bad', pacing: 'warn', music: 'accent2', sfx: 'accent2', hook: 'warn', visual: '', praise: 'good' };
+  const fmtN = n => n == null ? '–' : (n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + 'K' : String(n));
+  const thumbStr = t => typeof t === 'string' ? t : (t && typeof t === 'object' ? ['subject', 'text', 'colours', 'colors'].map(k => t[k]).filter(Boolean).join(' — ') : String(t ?? ''));
   function renderPredict(j) {
-    const p = j.prediction || {}, v = j.video || {}, dur = j.duration_s || 0;
-    const basis = p.watched ? 'watched video' : (p.has_transcript ? 'transcript' : 'title only');
-    const basisSub = p.watched ? 'frames + audio analyzed' : (p.has_transcript ? 'higher confidence' : 'paste a script / upload the video');
+    const p = j.prediction || {}, v = j.video || {}, dur = j.duration_s || 0, bl = p.baseline, act = p.actual, ev = p.expected_views;
+    const src = p.transcript_source || '';
+    const basis = p.watched ? (p.has_transcript ? 'watched + heard' : 'watched (frames)')
+      : src === 'script' ? 'your script' : (p.has_transcript ? 'real transcript' : 'title only');
+    const basisSub = p.watched ? (p.has_transcript ? `frames · audio · ${esc(src)}` : 'frames + audio, no speech found')
+      : src === 'script' ? 'timestamps estimated from reading pace'
+      : (p.has_transcript ? `${esc(src)} · ${esc(p.confidence || '')} confidence` : 'no captions found — paste the script or upload the MP4');
+    const conf = p.confidence ? `<span class="pill ${p.confidence === 'high' ? 'good' : p.confidence === 'low' ? 'bad' : 'warn'}" style="margin-left:6px;text-transform:uppercase">${esc(p.confidence)}</span>` : '';
+    const avdSub = act && act.avd_pct != null ? `actual ${act.avd_pct}% (YouTube Analytics)` : (act && act.channel_avd_pct ? `channel typical ${act.channel_avd_pct}%` : (dur ? '~' + secT(Math.round(dur * (p.avd_pct || 0) / 100)) + ' of ' + secT(dur) : ''));
+    const blTile = bl ? `<div class="tile"><div class="k">Expected views</div><div class="v">${ev ? fmtN(ev.low) + '–' + fmtN(ev.high) : '–'}</div><div class="sub">channel median ${fmtN(bl.median_views)} · last ${bl.n} ${bl.format}s${bl.this_views != null ? ` · now ${fmtN(bl.this_views)} (${bl.this_multiple}x)` : ''}</div></div>` : '';
     $('#pvOut').innerHTML = `
       <div class="tiles pred-tiles">
         <div class="tile"><div class="k">Predicted score</div><div class="v">${p.predicted_score ?? '–'}<span class="tiny">/100</span></div><div class="sub">${esc(p.verdict || '')}</div></div>
-        <div class="tile"><div class="k">Avg view duration</div><div class="v">${p.avd_pct ?? '–'}%</div><div class="sub">${dur ? '~' + secT(Math.round(dur * (p.avd_pct || 0) / 100)) + ' of ' + secT(dur) : ''}</div></div>
-        <div class="tile"><div class="k">Hook · first 30s</div><div class="v">${p.hook_score ?? '–'}<span class="tiny">/10</span></div></div>
-        <div class="tile"><div class="k">Basis</div><div class="v" style="font-size:15px">${basis}</div><div class="sub">${basisSub}</div></div>
+        <div class="tile"><div class="k">Avg view duration</div><div class="v">${p.avd_pct ?? '–'}%</div><div class="sub">${avdSub}</div></div>
+        <div class="tile"><div class="k">Hook · first 30s</div><div class="v">${p.hook_score ?? '–'}<span class="tiny">/10</span></div><div class="sub">${(p.curve || []).find(c => c.pct === 5) ? 'keeps ' + (p.curve.find(c => c.pct === 5).retention) + '% past 5%' : ''}</div></div>
+        ${blTile}
+        <div class="tile"><div class="k">Basis</div><div class="v" style="font-size:15px">${basis}${conf}</div><div class="sub">${basisSub}</div></div>
       </div>
-      ${v.thumb ? `<div class="row" style="gap:14px;margin-bottom:14px"><img src="${v.thumb}" style="width:168px;border-radius:10px"><div><b>${esc(v.title || j.title || '')}</b><div class="tiny">${esc(v.channel_title || '')}${dur ? ' · ' + secT(dur) : ''}</div></div></div>` : ''}
-      <div class="panel"><h3>Predicted audience retention <span class="hint">AI estimate · <span class="dot-drop">●</span> drop-off · <span class="dot-replay">●</span> replayed</span></h3><div id="pvChart" class="chart retn" style="height:260px"></div></div>
+      ${v.thumb ? `<div class="row" style="gap:14px;margin-bottom:14px"><img src="${v.thumb}" style="width:168px;border-radius:10px"><div><b>${esc(v.title || j.title || '')}</b><div class="tiny">${esc(v.channel_title || (bl && bl.channel_title) || '')}${dur ? ' · ' + secT(dur) : ''}${v.views != null ? ' · ' + fmtN(v.views) + ' views' : ''}${bl && bl.median_duration_s ? ' · channel median length ' + secT(bl.median_duration_s) : ''}</div></div></div>` : ''}
+      <div class="panel"><h3>${act ? 'Predicted vs actual retention' : 'Predicted audience retention'} <span class="hint">${act ? '<span class="dot-actual">●</span> YouTube Analytics actual · ' : ''}<span class="dot-pred">●</span> ${act ? 'predicted' : 'AI estimate'} · <span class="dot-drop">●</span> drop-off · <span class="dot-replay">●</span> replayed</span></h3><div id="pvChart" class="chart retn" style="height:260px"></div></div>
       ${(p.notes || []).length ? `<div class="panel"><h3>Editor notes <span class="hint">timestamped teardown</span></h3>${p.notes.map(n => `<div class="moment"><span class="ts">${esc(n.ts || (n.t != null ? secT(n.t) : '—'))}</span><span class="pill ${NOTE_CLASS[n.type] === 'good' ? 'good' : NOTE_CLASS[n.type] === 'bad' ? 'bad' : NOTE_CLASS[n.type] === 'warn' ? 'warn' : ''}" style="text-transform:uppercase">${esc(n.type || 'note')}</span><span>${esc(n.note || '')}</span></div>`).join('')}</div>` : ''}
       <div class="grid2">
         <div class="panel"><h3>Biggest drop-offs</h3>${(p.drop_offs || []).map(m => `<div class="moment drop"><span class="ts">${m.t != null ? secT(m.t) : (m.pct || 0) + '%'}</span><span>${esc(m.reason || '')}</span></div>`).join('') || '<p class="muted">None flagged.</p>'}</div>
@@ -1332,22 +1451,30 @@
       </div>
       <div class="panel"><h3>Summary</h3><p>${esc(p.summary || '')}</p>
         ${(p.fixes || []).length ? `<h3 class="mt">Fixes that would lift retention</h3><ol>${p.fixes.map(f => `<li>${esc(f)}</li>`).join('')}</ol>` : ''}
-        ${p.packaging ? `<h3 class="mt">Title ideas</h3>${(p.packaging.titles || []).length ? `<ul>${p.packaging.titles.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}${(p.packaging.thumbnails || []).length ? `<h3 class="mt">Thumbnail concepts</h3><ul>${p.packaging.thumbnails.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : (p.packaging.thumbnail ? `<p><b>Thumbnail:</b> ${esc(p.packaging.thumbnail)}</p>` : '')}` : ''}</div>`;
+        ${p.packaging ? `${(p.packaging.titles || []).length ? `<h3 class="mt">Title ideas</h3><ul>${p.packaging.titles.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}${(p.packaging.thumbnails || []).length ? `<h3 class="mt">Thumbnail concepts</h3><ul>${p.packaging.thumbnails.map(t => `<li>${esc(thumbStr(t))}</li>`).join('')}</ul>` : ''}` : ''}</div>`;
     retentionChart($('#pvChart'), p, dur);
   }
   function retentionChart(el, p, dur) {
     const W = el.clientWidth || 700, H = el.clientHeight || 260, P = { l: 42, r: 14, t: 14, b: 26 };
     const curve = (p.curve || []).slice().sort((a, b) => a.pct - b.pct);
     if (curve.length < 2) { el.innerHTML = '<p class="muted">No curve returned.</p>'; return; }
-    const X = pct => P.l + (pct / 100) * (W - P.l - P.r), Y = r => H - P.b - (r / 100) * (H - P.t - P.b);
+    const actual = (p.actual && p.actual.curve || []).slice().sort((a, b) => a.pct - b.pct);
+    const maxY = Math.max(100, ...actual.map(c => c.retention || 0));
+    const X = pct => P.l + (pct / 100) * (W - P.l - P.r), Y = r => H - P.b - (r / maxY) * (H - P.t - P.b);
     let g = '';
     for (let i = 0; i <= 4; i++) { const yv = 100 * i / 4; g += `<line x1="${P.l}" x2="${W - P.r}" y1="${Y(yv)}" y2="${Y(yv)}" stroke="${cssVar('--line')}"/><text x="${P.l - 6}" y="${Y(yv) + 4}" fill="${cssVar('--muted')}" font-size="10" text-anchor="end">${yv}%</text>`; }
     for (let pc = 0; pc <= 100; pc += 25) { const t = dur ? Math.round(dur * pc / 100) : null; g += `<text x="${X(pc)}" y="${H - 8}" fill="${cssVar('--muted')}" font-size="10" text-anchor="middle">${t != null ? secT(t) : pc + '%'}</text>`; }
+    const tip = (c, label) => `<title>${label} · ${dur ? secT(Math.round(dur * c.pct / 100)) + ' (' + c.pct + '%)' : c.pct + '%'} · ${Math.round(c.retention)}% watching</title>`;
+    if (actual.length > 1) {
+      g += `<polyline fill="none" stroke="${cssVar('--good')}" stroke-width="1.5" stroke-linejoin="round" points="${actual.map(c => `${X(c.pct)},${Y(c.retention)}`).join(' ')}"/>`;
+      g += actual.filter((_, i) => i % 5 === 0).map(c => `<circle cx="${X(c.pct)}" cy="${Y(c.retention)}" r="4" fill="transparent" stroke="none">${tip(c, 'actual')}</circle>`).join('');
+    }
     const pts = curve.map(c => `${X(c.pct)},${Y(c.retention)}`).join(' ');
-    g += `<polyline class="series" fill="none" stroke="${cssVar('--trail')}" stroke-width="1.5" stroke-linejoin="round" points="${pts}"/>`;
+    g += `<polyline class="series" fill="none" stroke="${cssVar('--trail')}" stroke-width="1.5" stroke-linejoin="round" ${actual.length > 1 ? 'stroke-dasharray="5 4"' : ''} points="${pts}"/>`;
+    g += curve.map(c => `<circle cx="${X(c.pct)}" cy="${Y(c.retention)}" r="5" fill="transparent" stroke="none">${tip(c, 'predicted')}</circle>`).join('');
     const at = pct => { let best = curve[0]; for (const c of curve) if (Math.abs(c.pct - pct) < Math.abs(best.pct - pct)) best = c; return best.retention; };
-    (p.drop_offs || []).forEach(m => { const x = X(m.pct || 0), y = Y(at(m.pct || 0)); g += `<line x1="${x}" x2="${x}" y1="${Y(0)}" y2="${P.t}" stroke="${cssVar('--bad')}" stroke-dasharray="3 3" opacity=".6"/><circle cx="${x}" cy="${y}" r="3.5" fill="${cssVar('--bad')}"/>`; });
-    (p.replays || []).forEach(m => { const x = X(m.pct || 0), y = Y(at(m.pct || 0)); g += `<circle cx="${x}" cy="${y}" r="3.5" fill="${cssVar('--good')}"/>`; });
+    (p.drop_offs || []).forEach(m => { const x = X(m.pct || 0), y = Y(at(m.pct || 0)); g += `<line x1="${x}" x2="${x}" y1="${Y(0)}" y2="${P.t}" stroke="${cssVar('--bad')}" stroke-dasharray="3 3" opacity=".6"/><circle cx="${x}" cy="${y}" r="3.5" fill="${cssVar('--bad')}"><title>${esc(m.reason || 'drop-off')}</title></circle>`; });
+    (p.replays || []).forEach(m => { const x = X(m.pct || 0), y = Y(at(m.pct || 0)); g += `<circle cx="${x}" cy="${y}" r="3.5" fill="${cssVar('--warn')}"><title>${esc(m.reason || 'replayed')}</title></circle>`; });
     el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${g}</svg>`;
   }
 
@@ -1400,18 +1527,34 @@
     $$('#gnStyles .style-chip').forEach(b => b.onclick = () => { gen.style = b.dataset.style; $$('#gnStyles .style-chip').forEach(x => x.classList.toggle('on', x === b)); });
     renderRefs(j.refs || {});
     renderGallery(j.outputs || []);
+    renderAllowance(j.allowance);
+    if (j.limits && $('#gnRefHint')) $('#gnRefHint').textContent = `Add your own face, character, logo or style images with ＋ (PNG, JPEG or WebP, up to ${j.limits.ref_mb} MB, ${j.limits.per_kind} of each), then click the ones to use. Nobody else can see them.`;
     $('#gnMsg').innerHTML = j.gemini ? '' : '<span class="err">Add a Gemini API key in Settings to generate thumbnails.</span>';
     if ($('#gnImportChan')) {
-      $('#gnImportChan').innerHTML = (state.channels || []).map(c => `<option value="${c.channel_id}">${esc(c.title || c.channel_id)}</option>`).join('') || '<option value="">no channels tracked</option>';
+      // your tracked channels are suggestions; any @handle or channel link works too
+      $('#gnImportList').innerHTML = (state.channels || []).map(c => `<option value="${esc(c.channel_id)}">${esc(c.title || c.channel_id)}</option>`).join('');
       $('#gnImport').onclick = async () => {
-        const cid = $('#gnImportChan').value; if (!cid) { toast('No channel to import from'); return; }
-        $('#gnMsg').textContent = 'Importing your avatar + top thumbnails…';
-        const r = await api('/api/thumbs/import', { method: 'POST', body: { channel_id: cid } });
-        if (r.ok) { $('#gnMsg').textContent = `Imported ${(r.added && r.added.character) || 0} avatar + ${(r.added && r.added.style) || 0} thumbnail(s) as references.`; renderRefs(r.refs || {}); }
-        else $('#gnMsg').innerHTML = `<span class="err">${esc(r.error)}</span>`;
+        const ref = ($('#gnImportChan').value || '').trim();
+        if (!ref) { $('#gnImportChan').focus(); toast("Paste your channel's @handle or link"); return; }
+        $('#gnImport').disabled = true;
+        $('#gnMsg').textContent = 'Importing the avatar, banner and top thumbnails…';
+        const r = await api('/api/thumbs/import', { method: 'POST', body: { channel: ref } });
+        $('#gnImport').disabled = false;
+        if (r.ok) {
+          const a = r.added || {};
+          $('#gnMsg').textContent = `Imported ${a.character || 0} avatar + ${a.style || 0} style image(s) from ${r.channel || 'that channel'}.`;
+          renderRefs(r.refs || {});
+        } else $('#gnMsg').innerHTML = `<span class="err">${esc(r.error)}</span>`;
       };
     }
     $('#gnGo').onclick = doGenerate;
+  }
+  function renderAllowance(a) {
+    const el = $('#gnAllow'); if (!el) return;
+    if (!a || a.limit === null || a.limit === undefined) { el.textContent = ''; return; }
+    el.textContent = a.limit === 0 ? 'The generator is limited to whitelisted accounts.'
+      : `${a.left} of ${a.limit} free thumbnails left today (resets at midnight UTC).`;
+    $('#gnGo').disabled = a.left <= 0;
   }
   function renderRefs(refs) {
     $('#gnRefs').innerHTML = Object.keys(REF_LABELS).map(kind => `<div class="refkind">${REF_LABELS[kind]}</div>
@@ -1438,6 +1581,7 @@
     const refs = [...gen.refs].map(k => ({ kind: k.split(':')[0], id: k.split(':')[1] }));
     const j = await api('/api/thumbs/generate', { method: 'POST', body: { style: gen.style, subject, text: $('#gnText').value, refs } });
     $('#gnGo').disabled = false;
+    if (j.allowance) renderAllowance(j.allowance);
     if (!j.ok) { $('#gnPreview').innerHTML = '<div class="ph">Generation failed</div>'; $('#gnMsg').innerHTML = `<span class="err">${esc(j.error)}</span>`; return; }
     $('#gnMsg').textContent = ''; $('#gnPreview').innerHTML = `<img src="${j.url}?t=${Date.now()}">`;
     const g = await api('/api/thumbs'); renderGallery(g.outputs || []);
