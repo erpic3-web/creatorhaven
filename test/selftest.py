@@ -1019,17 +1019,22 @@ def main():
     r = c.post("/api/strategy/reset", json={}).get_json()
     check("strategy reset clears memory", r["ok"] and strategist.pitched(store) == [] and strategist.history(store) == [])
 
-    # ------------------------------------------------------ phone app (PWA)
-    r = c.get("/m")
-    check("phone app page renders", r.status_code == 200 and b'rel="manifest"' in r.data and b"/sw.js" in r.data and b"How may I help you" in r.data)
+    # ------------------------------------------- one site on every screen (installable)
+    phone_ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1"
+    r = c.get("/", headers={"User-Agent": phone_ua})
+    check("phones get the full site (no /m redirect)", r.status_code == 200 and b'id="tabs"' in r.data)
+    check("full site is installable (manifest + service worker + theme colour)",
+          b'rel="manifest"' in r.data and b"/sw.js" in r.data and b'name="theme-color"' in r.data)
+    r = c.get("/m", headers={"User-Agent": phone_ua})
+    check("old /m app forwards to the full site", r.status_code in (301, 302) and r.headers["Location"] in ("/", "http://localhost/"))
     r = c.get("/manifest.webmanifest")
-    check("manifest served with the right type", r.status_code == 200 and "manifest+json" in r.headers.get("Content-Type", "") and r.get_json(force=True)["start_url"] == "/m")
+    check("manifest served with the right type", r.status_code == 200 and "manifest+json" in r.headers.get("Content-Type", "") and r.get_json(force=True)["start_url"] == "/")
     r = c.get("/sw.js")
-    check("service worker at root scope", r.status_code == 200 and b"-m-v" in r.data and "javascript" in r.headers.get("Content-Type", ""))
-    r = c.get("/", headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1"})
-    check("phones are redirected to /m", r.status_code == 302 and r.headers["Location"].endswith("/m"))
-    r = c.get("/?desktop=1", headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile/15E148"})
-    check("?desktop=1 keeps a phone on the full site", r.status_code == 200)
+    check("service worker at root scope", r.status_code == 200 and b"ch-v3" in r.data and "javascript" in r.headers.get("Content-Type", ""))
+    css = c.get("/static/style.css").data
+    check("phone layer ships (sticky tab row + 16px fields)", b"PHONES (2026-09-28)" in css and b"font-size:16px !important" in css)
+    js = c.get("/static/editorial.js").data
+    check("letter pop replaced the scramble", b"splitLetters" in js and b"GLYPHS" not in js)
     r = c.get("/", headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/128"})
     check("desktop stays on the full site", r.status_code == 200)
 
