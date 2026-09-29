@@ -1367,3 +1367,161 @@ table th{ font-family:var(--mono); text-transform:uppercase; letter-spacing:.1em
 body.eh-cursor-on #eh-deck-trigger, body.eh-cursor-on #eh-deck .eh-close, body.eh-cursor-on #eh-deck .eh-cta, body.eh-cursor-on #eh-deck .eh-sw{ cursor:none; }
 @media (pointer:coarse){ body.eh-cursor-on #eh-deck-trigger, body.eh-cursor-on #eh-deck .eh-close, body.eh-cursor-on #eh-deck .eh-cta, body.eh-cursor-on #eh-deck .eh-sw{ cursor:pointer; } }
 
+
+/* ============================================================================
+   LETTER POP (2026-09-28) — replaces the text-scramble flare.
+   editorial.js splits the nav tabs and headings into one span per letter (.eh-l, words kept
+   together by .eh-w). With a mouse, the letter under the pointer lifts a little and its
+   neighbours half as much; the ::after strip keeps the hit area under the pointer while
+   the letter is raised, so it never flickers. On touch a tap sends one wave through the word.
+   The text itself never changes.
+   ========================================================================== */
+.eh-w{ white-space:nowrap; }
+.eh-l{ display:inline-block; position:relative; transition:transform .22s var(--spring); }
+.eh-l::after{ content:""; position:absolute; left:0; right:0; top:100%; height:.3em; }
+@media (hover:hover){
+  .eh-l:hover{ transform:translateY(-.14em); }
+  .eh-l:hover + .eh-l, .eh-l:has(+ .eh-l:hover){ transform:translateY(-.06em); }
+}
+.eh-wave .eh-l{ animation:ehPop .46s var(--spring) both; animation-delay:calc(var(--i,0) * var(--step,24ms)); }
+@keyframes ehPop{ 0%,100%{ transform:none; } 40%{ transform:translateY(-.16em); } }
+@media (prefers-reduced-motion:reduce){ .eh-l{ transition:none; } .eh-wave .eh-l{ animation:none; } }
+
+/* touch screens have no hover: nothing waits for one, and nothing stays "hovered" after a tap */
+.eh-deck-btn{ display:none; }
+@media (hover:none){
+  .card:hover, .tile:hover, .qa-tile:hover, .home-chip:hover, .studio-nav button:hover{ transform:none; }
+  :root[data-theme] .card:hover, :root[data-theme] .tile:hover, .card:hover, .tile:hover{ box-shadow:none; }
+  .lg-table:hover .lg-row, tbody:hover tr, .gen-gallery:hover a, .idea-board:hover .idea{ opacity:1; }
+  .lg-del, .refthumb .x{ opacity:1; }
+}
+
+/* ============================================================================
+   PHONES (2026-09-28) — the full site on a 360-430px screen. Last layer in the file, so it
+   wins over the older ones. The header is three rows (brand, search, tabs); the sticky
+   offset scrolls the first two away and keeps the tab row pinned. Every text field is 16px
+   so iPhones don't zoom in on focus.
+   ========================================================================== */
+@media (max-width:760px){
+  :root{ --m-meta:53px; --m-find:52px; }
+  #app{ overflow-x:clip; }
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]), select, textarea{ font-size:16px !important; }
+
+  /* ---- header ---- */
+  .topbar{ top:calc(-1 * (var(--m-meta) + var(--m-find))); }
+  body.home-active .topbar{ top:calc(-1 * var(--m-meta)); }
+  body.home-active .tb-find{ display:none; }
+  #toolPane{ scroll-margin-top:58px; }
+  #eh-deck .eh-row:has(#eh-sw-cursor){ display:none; }
+  .tb-meta{ height:var(--m-meta); box-sizing:border-box; padding:0 10px 0 14px; gap:10px; }
+  .tb-id{ gap:8px; min-width:0; }
+  .tb-word{ font-size:20px; white-space:nowrap; }
+  .tb-ver, .quota, .tb-sync{ display:none; }
+  .tb-ctl{ gap:7px; flex:none; }
+  .tb-theme, .eh-deck-btn{ height:36px; min-width:36px; padding:0 9px; }
+  .avatar{ width:36px !important; height:36px !important; }
+  .eh-deck-btn{ display:grid; place-items:center; border:1px solid var(--line2); background:var(--paper); color:var(--text); cursor:pointer; }
+  .eh-deck-btn svg{ display:block; }
+  #eh-deck-trigger{ display:none; }
+  .tb-nav{ display:flex; flex-direction:column; align-items:stretch; padding:0; gap:0; }
+  .navstrip{ min-width:0; }
+  .tb-find{ order:-1; height:var(--m-find); box-sizing:border-box; padding:6px 12px; width:auto; max-width:none; }
+  .tb-find .search{ height:40px; box-sizing:border-box; }
+  .tb-find .search input{ height:36px; }
+  .navstrip{ flex-wrap:nowrap; justify-content:flex-start; gap:10px; height:46px; padding:0 18px 0 14px;
+    overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain; scrollbar-width:none;
+    -webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 26px),transparent);
+            mask-image:linear-gradient(90deg,#000 calc(100% - 26px),transparent); }
+  .navstrip::-webkit-scrollbar{ display:none; }
+  .navstrip button{ flex:none; font-size:17px; padding:10px 2px; }
+  .navstrip button::after{ bottom:3px; }
+  .nsep{ flex:none; }
+
+  /* ---- page frame ---- */
+  main{ padding:16px 14px 44px; }
+  h2{ font-size:22px; }
+  .panel{ padding:14px; }
+  .row.between{ gap:10px; }
+  .grid2, .grid6040, .dash-launch, .reviewgrid, .gen-layout, .toolwrap{ grid-template-columns:1fr; }
+  .cards{ grid-template-columns:1fr; }
+  main p, main li, main code, .kv span, .msg, .tok{ overflow-wrap:anywhere; }
+  /* a table wider than the screen scrolls sideways on its own (the page never does) */
+  main table{ display:block; overflow-x:auto; max-width:100%; }
+  main .tablewrap > table{ display:table; overflow:visible; max-width:none; }
+  main .panel, .grid2 > *, .grid6040 > *, .alert .body{ min-width:0; }
+  pre, .log{ white-space:pre-wrap; overflow-wrap:anywhere; }
+
+  /* ---- home ---- */
+  .home{ min-height:0; padding:18px 0 34px; }
+  img.home-logo{ width:92px !important; height:92px !important; margin-bottom:12px; }
+  .home-title{ font-size:clamp(2.6rem,13.5vw,3.5rem) !important; }
+  .home-tag{ font-size:14px; margin-bottom:22px; }
+  .home-search{ flex-wrap:wrap; gap:0; box-shadow:6px 6px 0 var(--hard); margin-right:6px; }
+  .home-search input{ flex:1 1 100%; height:54px; padding-left:46px; }
+  .home-search .hs-ic{ top:18px; left:16px; }
+  .home-search .hs-go{ flex:1 1 100%; height:46px; }
+  .home-chips{ gap:8px; margin-top:26px; }
+
+  /* ---- dashboard ---- */
+  .dash-head{ flex-direction:column; align-items:stretch; gap:12px; }
+  .dash-head .seg{ align-self:flex-start; }
+  .greet{ margin-bottom:6px; }
+  .greet h1{ font-size:26px; }
+  .tiles{ grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; }
+  .tile{ padding:14px; }
+  .tile .v{ font-size:30px; }
+  .tiles.income .v{ font-size:20px; white-space:normal; }
+  .seg{ max-width:100%; overflow-x:auto; scrollbar-width:none; }
+  .seg button{ flex:none; }
+
+  /* ---- channels: the rail becomes a sideways strip of channel chips ---- */
+  .chanlayout{ flex-direction:column; align-items:stretch; }
+  #chanRail{ width:auto; flex:none; position:static; max-height:none; padding:10px; }
+  #chanList{ flex-direction:row; overflow-x:auto; gap:6px; padding-bottom:4px; scrollbar-width:thin; }
+  #chanList .chrow{ width:auto; flex:none; max-width:210px; padding:7px 10px 7px 7px; border:1px solid var(--line); }
+  #chanList .chrow.on{ box-shadow:inset 0 -3px 0 var(--accent); }
+  #chanList .chrow img, #chanList .chrow .ph{ width:30px; height:30px; flex-basis:30px; }
+  #linkOwnBtn{ width:100%; }
+  #chanMain{ min-width:0; }
+  #chanMain > .row.between{ flex-direction:column; align-items:stretch; }
+  .tiles-hero{ grid-template-columns:1fr 1fr; gap:10px; }
+  .tiles-hero .tile.hero:first-child{ grid-column:1 / -1; }
+  .tile.hero{ padding:14px; }
+  .tile.hero .v{ font-size:30px; }
+
+  /* ---- studio ---- */
+  .studio-nav{ flex-wrap:nowrap; overflow-x:auto; gap:6px; margin:0 -14px 16px; padding:0 14px 4px; scrollbar-width:none; }
+  .studio-nav::-webkit-scrollbar{ display:none; }
+  .studio-nav button{ flex:none; padding:9px 13px; }
+  #tab-studio .st-canvas{ padding-left:0; padding-right:0; }
+  #stDock{ padding:22px 10px calc(10px + env(safe-area-inset-bottom)) !important; }
+  #stDock .justify-between > span:first-child{ display:none; }
+  .style-grid{ grid-template-columns:1fr 1fr; }
+  .gen-gallery{ grid-template-columns:1fr 1fr; }
+  .gen-controls, .gen-stage{ padding:14px; }
+
+  /* ---- search (channel lookup) ---- */
+  .lk-banner{ height:92px; margin-bottom:-26px; }
+  .lk-head{ gap:12px; }
+  .lk-head img.av{ width:64px; height:64px; }
+  .lk-videos .vt{ max-width:none; min-width:180px; }
+
+  /* ---- tools ---- */
+  .toollist{ position:static; }
+
+  /* ---- ledger ---- */
+  .lg-ctl{ width:100%; }
+  .lg-search{ flex:1; width:auto; max-width:none; min-width:0; }
+  .lg-new{ flex:none; white-space:nowrap; }
+
+  /* ---- sign-in, dialogs, toast ---- */
+  .login .card{ width:min(360px, calc(100vw - 28px)); }
+  .sf-modal-back{ padding:14px; }
+  .toast{ max-width:calc(100vw - 28px); bottom:calc(18px + env(safe-area-inset-bottom)); }
+}
+@media (max-width:400px){
+  .tb-word{ font-size:18px; }
+  .tb-theme{ padding:0 7px; }
+  .tiles{ grid-template-columns:1fr 1fr; }
+  .tile .v{ font-size:26px; }
+}

@@ -75,41 +75,72 @@
     if (t.closest && t.closest(TEXTY)) cursor.classList.remove("eh-text");
   });
 
-  /* --------------------------------------------------- text-scramble flare -- */
-  var GLYPHS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/#*·—";
-  function scramble(el){
-    if (el.dataset.ehLock === "1") return;
-    var nodes = [];
-    (function walk(n){
-      for (var i=0;i<n.childNodes.length;i++){
-        var c = n.childNodes[i];
-        if (c.nodeType === 3 && c.nodeValue.trim().length){
-          var s = document.createElement("span"); s.textContent = c.nodeValue; n.replaceChild(s, c);
-          nodes.push({ el:s, txt:c.nodeValue });
-        } else if (c.nodeType === 1 && !c.classList.contains("badge")) { walk(c); }
-      }
-    })(el);
-    if (!nodes.length) return;
-    el.dataset.ehLock = "1";
-    var start = performance.now(), DUR = 250;
-    (function frame(now){
-      var p = Math.min(1, (now - start) / DUR);
-      nodes.forEach(function(it){
-        var reveal = Math.floor(p * it.txt.length), out = "";
-        for (var i=0;i<it.txt.length;i++){ out += (it.txt[i] === " " || i < reveal) ? it.txt[i] : GLYPHS[(Math.random()*GLYPHS.length)|0]; }
-        it.el.textContent = out;
-      });
-      if (p < 1) requestAnimationFrame(frame);
-      else { nodes.forEach(function(it){ it.el.textContent = it.txt; }); el.dataset.ehLock = "0"; }
-    })(start);
+  /* ------------------------------------------------------------ letter pop -- */
+  // Replaces the old text-scramble flare: hovering a tab name or heading lifts the letter under
+  // the pointer a little (CSS, see LETTER POP in style.css); on touch a tap runs one wave through
+  // the word. Each text node is split into a no-wrap span per word holding an inline-block span
+  // per letter. textContent stays identical and the letters are never changed.
+  var POP_SEL = ".navstrip button, .home-title, h2, h3.eh-scr, [data-scramble]";
+  var KEEP = ".badge,svg,a,button,input,select,textarea,label";   // never split inside these
+  function looseText(el){
+    var out = [], w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+    for (var n = w.nextNode(); n; n = w.nextNode()){
+      var p = n.parentNode, keep = p.closest(KEEP);
+      if (!n.nodeValue.trim() || p.classList.contains("eh-l") || (keep && keep !== el && el.contains(keep))) continue;
+      out.push(n);
+    }
+    return out;
   }
-  function bindScramble(root){
-    (root || document).querySelectorAll(".navstrip button, .home-title, h2, h3.eh-scr, [data-scramble]").forEach(function(el){
-      if (el.dataset.ehScr === "1") return; el.dataset.ehScr = "1";
-      el.addEventListener("mouseenter", function(){ scramble(el); });
+  // Letter spans are hidden from screen readers (some read inline-block letters one by one),
+  // so the host carries the words as its label, plus a visible badge count (the Alerts tab).
+  function popLabel(el){
+    var words = [];
+    el.querySelectorAll(".eh-w").forEach(function(w){ words.push(w.textContent); });
+    var label = words.join(" ");
+    var badge = el.querySelector(".badge:not(.hidden)");
+    if (badge && badge.textContent.trim()) label += " (" + badge.textContent.trim() + ")";
+    if (label && el.getAttribute("aria-label") !== label) el.setAttribute("aria-label", label);
+  }
+  function splitLetters(el, texts){
+    var letters = 0;
+    texts.forEach(function(t){
+      var frag = document.createDocumentFragment();
+      t.nodeValue.split(/(\s+)/).forEach(function(part){
+        if (!part) return;
+        if (!part.trim()) { frag.appendChild(document.createTextNode(part)); return; }
+        var word = document.createElement("span"); word.className = "eh-w"; word.setAttribute("aria-hidden", "true");
+        Array.from(part).forEach(function(ch){
+          var l = document.createElement("span"); l.className = "eh-l"; l.textContent = ch;
+          l.style.setProperty("--i", letters++); word.appendChild(l);
+        });
+        frag.appendChild(word);
+      });
+      t.parentNode.replaceChild(frag, t);
+    });
+    // a long heading's wave still finishes in about half a second
+    el.style.setProperty("--step", Math.min(24, 440 / Math.max(1, letters)).toFixed(1) + "ms");
+  }
+  function bindPop(){
+    document.querySelectorAll(POP_SEL).forEach(function(el){
+      var texts = looseText(el);
+      if (texts.length) splitLetters(el, texts);
+      if (el.querySelector(".eh-w")) popLabel(el);
     });
   }
-  bindScramble(document);
+  bindPop();
+  // the Alerts count shows/hides by class and changes its text: keep the tab's label in step
+  var alertBadge = document.getElementById("alertBadge");
+  if (alertBadge) new MutationObserver(function(){
+    var b = alertBadge.closest("button"); if (b && b.querySelector(".eh-w")) popLabel(b);
+  }).observe(alertBadge, { attributes:true, attributeFilter:["class"], childList:true, characterData:true, subtree:true });
+  document.addEventListener("pointerdown", function(e){
+    if (e.pointerType === "mouse" || !e.target.closest) return;
+    var host = e.target.closest(POP_SEL);
+    if (!host || !host.querySelector(".eh-l")) return;
+    host.classList.remove("eh-wave"); void host.offsetWidth; host.classList.add("eh-wave");
+    clearTimeout(host._ehWave);
+    host._ehWave = setTimeout(function(){ host.classList.remove("eh-wave"); }, 1100);
+  }, { passive:true });
 
   /* --------------------------------------------------- tactile click wiring - */
   document.addEventListener("pointerdown", function(e){
@@ -179,7 +210,60 @@
     applyCursor(); Audio.click(0.3, 900);
   });
 
-  /* rebind scramble when tabs re-render dynamic headings */
-  var mo = new MutationObserver(function(){ bindScramble(document); });
+  /* ------------------------------------------------------------ phones ----- */
+  // The side tab of the deck would cover the right edge of a phone screen, so phones get a
+  // menu button in the header instead (shown by the phone layer in style.css).
+  var PHONE = window.matchMedia ? window.matchMedia("(max-width:760px)") : { matches:false };
+  var ctl = document.querySelector(".tb-ctl");
+  if (ctl) {
+    var menuBtn = document.createElement("button");
+    menuBtn.type = "button"; menuBtn.className = "eh-deck-btn"; menuBtn.setAttribute("aria-label", "Menu: sync, quota and shortcuts");
+    menuBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
+    menuBtn.addEventListener("click", openDeck);
+    ctl.insertBefore(menuBtn, ctl.firstChild);
+  }
+  // The sideways-scrolling strips (tabs, Studio sections, channel chips) keep their selected
+  // item centred. Measured with rects, so it works whatever the strip's current scroll is.
+  function centerActive(strip, sel, smooth){
+    if (!PHONE.matches || !strip) return;
+    var a = strip.querySelector(sel); if (!a) return;
+    var s = strip.getBoundingClientRect(), r = a.getBoundingClientRect();
+    if (!s.width) return;                                   // strip is on a hidden tab
+    var delta = (r.left + r.width / 2) - (s.left + s.width / 2);
+    if (Math.abs(delta) > 2) strip.scrollBy({ left: delta, behavior: smooth ? "smooth" : "auto" });
+  }
+  // react only when an item GAINS its selected class (the tap wave toggles classes too)
+  function watchSelected(strip, cls, onGain){
+    if (!strip) return;
+    new MutationObserver(function(recs){
+      for (var i = 0; i < recs.length; i++) {
+        var t = recs[i].target;
+        if (t.tagName === "BUTTON" && t.classList.contains(cls) && !new RegExp("\\b" + cls + "\\b").test(recs[i].oldValue || "")) { onGain(); return; }
+      }
+    }).observe(strip, { attributes:true, attributeFilter:["class"], attributeOldValue:true, subtree:true });
+  }
+  var tabsNav = document.getElementById("tabs"), studioNav = document.querySelector(".studio-nav"), chanList = document.getElementById("chanList");
+  // a new tab starts at the top of the page, like opening a new page
+  watchSelected(tabsNav, "active", function(){
+    centerActive(tabsNav, "button.active", true);
+    if (PHONE.matches) window.scrollTo(0, 0);
+    requestAnimationFrame(function(){ centerActive(studioNav, "button.on"); centerActive(chanList, ".chrow.on"); });
+  });
+  watchSelected(studioNav, "on", function(){ centerActive(studioNav, "button.on", true); });
+  if (chanList) new MutationObserver(function(){ centerActive(chanList, ".chrow.on"); }).observe(chanList, { childList:true });
+  centerActive(tabsNav, "button.active");
+  // picking a tool scrolls its pane into view (on a phone the pane sits under the tool list)
+  var toolList = document.getElementById("toolList");
+  if (toolList) toolList.addEventListener("click", function(e){
+    if (!PHONE.matches || !e.target.closest("button[data-tool]")) return;
+    setTimeout(function(){ var p = document.getElementById("toolPane"); if (p) p.scrollIntoView({ behavior:"smooth", block:"start" }); }, 60);
+  });
+
+  /* split new headings when tabs re-render their content (once per frame at most) */
+  var popQueued = false;
+  var mo = new MutationObserver(function(){
+    if (popQueued) return; popQueued = true;
+    requestAnimationFrame(function(){ popQueued = false; bindPop(); });
+  });
   mo.observe(document.getElementById("app") || document.body, { childList:true, subtree:true });
 })();

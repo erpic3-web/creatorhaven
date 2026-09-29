@@ -135,7 +135,8 @@
 
   // ------------------------------------------------- home (calm, ChatGPT-style landing)
   let homeInit = false;
-  function loadHome() { if (!homeInit) { homeInit = true; wireHomeSearch(); renderHomeChips(); } setTimeout(() => $('#homeQ')?.focus(), 60); }
+  // (no autofocus on touch screens: it would throw the keyboard up every time Home opens)
+  function loadHome() { if (!homeInit) { homeInit = true; wireHomeSearch(); renderHomeChips(); } if (!matchMedia('(pointer:coarse)').matches) setTimeout(() => $('#homeQ')?.focus(), 60); }
   function renderHomeChips() {
     const chips = [
       { t: 'Track a channel', act: () => $('#homeQ')?.focus() },
@@ -1179,7 +1180,10 @@
     $('#stLog').appendChild(d); return d;
   }
   const bodyOf = d => $('.st-body', d);
-  const scrollBottom = (smooth = true) => requestAnimationFrame(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: smooth ? 'smooth' : 'auto' }));
+  // only while the brain is on screen: the radar can finish loading after the user has moved
+  // to another tab, and it must not throw that page to its bottom
+  const brainOnScreen = () => $('#tab-studio')?.classList.contains('active') && $('#ssec-strategy')?.classList.contains('on');
+  const scrollBottom = (smooth = true) => requestAnimationFrame(() => { if (brainOnScreen()) window.scrollTo({ top: document.documentElement.scrollHeight, behavior: smooth ? 'smooth' : 'auto' }); });
   // paragraphs of a fresh reply slide in one after another
   function stagger(d) { $$('.st-body > .st-md > *, .st-body > .st-idea', d).forEach((el, i) => { el.classList.add('animate-fade-in-up'); el.style.animationDelay = `${Math.min(i, 12) * 55}ms`; }); }
   function showReply(d, text) { d._mdText = text; bodyOf(d).innerHTML = `<div class="st-md">${renderMd(text)}</div>`; stagger(d); }
