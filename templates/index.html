@@ -8,9 +8,14 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Dancing+Script:wght@500;600&family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=20260928a">
+<link rel="stylesheet" href="/static/style.css?v=20260928q">
 <link rel="stylesheet" href="/static/brain.css?v=3">
 <link rel="icon" href="/static/favicon.png"><link rel="apple-touch-icon" href="/static/icon-192.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#F9F8F6">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#141311">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="{{ app_name }}">
 </head>
 <body data-app="{{ app_name }}" data-version="{{ version }}">
 <div id="login" class="login hidden">
@@ -356,7 +361,8 @@
 </main>
 </div>
 <div id="toast" class="toast hidden"></div>
-<script src="/static/app.js?v=20260928b"></script>
-<script src="/static/editorial.js?v=3"></script>
+<script src="/static/app.js?v=20260928q"></script>
+<script src="/static/editorial.js?v=7"></script>
+<script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function(){});</script>
 </body>
 </html>
