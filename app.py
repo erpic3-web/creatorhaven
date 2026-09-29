@@ -464,17 +464,13 @@ def create_app(cfg=None, store=None, bases=None, start_background=False):
     # -------------------------------------------------------------- pages
     @app.get("/")
     def index():
-        # phones land on the app-shaped interface; ?desktop=1 forces the full site
-        ua = request.headers.get("User-Agent", "")
-        if request.args.get("desktop") != "1" and _re.search(r"Android|iPhone|iPod|Mobile Safari|Windows Phone", ua) \
-                and "iPad" not in ua:
-            return redirect("/m")
+        # one site for every screen: the phone layout lives in style.css (PHONES layer)
         return render_template("index.html", app_name=config.APP_NAME, version=config.APP_VERSION)
 
-    # ------------------------------------------------------ the phone app (PWA)
+    # the old phone-only app; bookmarks and installed home-screen icons land on the full site
     @app.get("/m")
     def mobile():
-        return render_template("mobile.html", app_name=config.APP_NAME, version=config.APP_VERSION)
+        return redirect("/")
 
     @app.get("/manifest.webmanifest")
     def manifest():
